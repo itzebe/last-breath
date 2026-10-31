@@ -22,7 +22,7 @@ export interface CombatHudProps {
 }
 
 export function CombatHud({ snapshot, onPause, onToggleDebug, debugOpen }: CombatHudProps) {
-  const { player, wave, waveNumber, enemiesRemaining, score } = snapshot;
+  const { player, wave, waveNumber, enemiesRemaining, score, deathmatch } = snapshot;
   const weapon = getWeapon(player.weapon);
   const state = player.weapons[player.weapon];
 
@@ -36,18 +36,41 @@ export function CombatHud({ snapshot, onPause, onToggleDebug, debugOpen }: Comba
     <div className="hud" aria-live="off">
       {/* ── Top row ─────────────────────────────────────────────────────── */}
       <div className="hud__row">
-        <div className="hud__panel" style={{ minWidth: 148 }}>
-          <p className="hud__label">Wave {waveNumber}</p>
-          <p className="hud__value hud__value--signal">{wave.label}</p>
-          <p className="hud__label" style={{ marginTop: 2 }}>
-            {enemiesRemaining} remaining
-            {wave.isBossWave ? ' · boss' : ''}
-          </p>
-        </div>
+        {deathmatch ? (
+          <div className="hud__panel" style={{ minWidth: 168 }}>
+            <p className="hud__label">
+              {deathmatch.phase === 'countdown'
+                ? 'Deathmatch — starting'
+                : deathmatch.phase === 'finished'
+                  ? 'Match over'
+                  : 'Deathmatch'}
+            </p>
+            <p className="hud__value hud__value--signal">
+              {formatClock(deathmatch.remainingMs)}
+            </p>
+            <p className="hud__label" style={{ marginTop: 2 }}>
+              {deathmatch.playerEliminations}/{deathmatch.eliminationTarget} eliminations
+              {deathmatch.playerRespawnMs > 0
+                ? ` · re-entering in ${Math.ceil(deathmatch.playerRespawnMs / 1000)}s`
+                : ''}
+            </p>
+          </div>
+        ) : (
+          <div className="hud__panel" style={{ minWidth: 148 }}>
+            <p className="hud__label">Wave {waveNumber}</p>
+            <p className="hud__value hud__value--signal">{wave.label}</p>
+            <p className="hud__label" style={{ marginTop: 2 }}>
+              {enemiesRemaining} remaining
+              {wave.isBossWave ? ' · boss' : ''}
+            </p>
+          </div>
+        )}
 
         <div className="hud__panel center" style={{ minWidth: 120 }}>
-          <p className="hud__label">Score</p>
-          <p className="hud__value">{formatNumber(score)}</p>
+          <p className="hud__label">{deathmatch ? 'Kills' : 'Score'}</p>
+          <p className="hud__value">
+            {deathmatch ? formatNumber(deathmatch.playerEliminations) : formatNumber(score)}
+          </p>
         </div>
 
         <div className="hud__panel" style={{ minWidth: 132 }}>

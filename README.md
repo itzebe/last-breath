@@ -4,7 +4,7 @@
 
 A mobile-friendly, top-down 360° survival shooter where the arena studies how you fight. There is no fixed strategy — only the one the enemy has not learned yet.
 
-Built for the **Loadout AI Game Competition**. Part 1 of two.
+Built for the **Loadout AI Game Competition**. Part 2 of two.
 
 ---
 
@@ -160,4 +160,8 @@ Four weapons with genuinely different behaviour: a balanced **pistol**, an autom
 
 ## Status
 
-Part 1 establishes the foundation: landing page, real Supabase authentication, player dashboard, and a fully functional combat arena with adaptive enemies. Part 2 extends it. See the repository history for the Part 1 completion report.
+Part 1 established the foundation: landing page, real Supabase authentication, player dashboard, and a fully functional combat arena with adaptive enemies.
+
+Part 2 completes the experience: a deep adaptive-AI behaviour model with five enemy archetypes, the **THE EXECUTOR** boss with three phases and telegraphed attacks, survival as a scored progression mode, a single-player **deathmatch** against clearly-labelled AI opponents, XP/levels/unlocks/achievements, a global leaderboard, procedural audio, and a visual-polish pass.
+
+The build is Vercel-ready (`npm run build` → static `dist/`). Deployment requires the Supabase project URL and anon key as Vercel environment variables, plus running the migrations against the project database.

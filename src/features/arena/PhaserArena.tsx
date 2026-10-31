@@ -3,13 +3,15 @@ import Phaser from 'phaser';
 import { ArenaScene, type ArenaOptions } from '@/game/scenes/ArenaScene';
 import { ARENA_HEIGHT, ARENA_WIDTH } from '@/game/logic/simulation';
 import type { WeaponId } from '@/game/logic/weapons';
-import type { SimulationSnapshot } from '@/game/logic/simulation';
+import type { ArenaMode, SimulationSnapshot } from '@/game/logic/simulation';
 
 export interface PhaserArenaProps {
   loadout: WeaponId[];
   adaptationEnabled: boolean;
   maxWaves?: number;
   seed?: number;
+  /** `survival` (default) or `deathmatch`. Fixed for the life of the run. */
+  mode?: ArenaMode;
   paused: boolean;
   onSnapshot: (snapshot: SimulationSnapshot) => void;
   onRunEnded: (snapshot: SimulationSnapshot) => void;
@@ -30,6 +32,7 @@ export function PhaserArena({
   adaptationEnabled,
   maxWaves,
   seed,
+  mode,
   paused,
   onSnapshot,
   onRunEnded,
@@ -53,6 +56,7 @@ export function PhaserArena({
       adaptationEnabled,
       seed,
       ...(maxWaves === undefined ? {} : { maxWaves }),
+      ...(mode === undefined ? {} : { mode }),
     };
 
     const game = new Phaser.Game({

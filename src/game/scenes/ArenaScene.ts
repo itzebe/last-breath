@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import {
   ARENA_HEIGHT,
   ARENA_WIDTH,
+  BOSS_ATTACKS,
   CombatSimulation,
   PLAYER_RADIUS,
   WALL_MARGIN,
@@ -9,6 +10,7 @@ import {
   type SimulationEvent,
   type SimulationInput,
   type SimulationSnapshot,
+  type ArenaMode,
 } from '@/game/logic/simulation';
 import { ENEMY_ARCHETYPES, type EnemyArchetypeId } from '@/game/logic/enemies';
 import { buildTextures, enemyTextureKeys, PALETTE } from '@/game/render/textures';
@@ -42,6 +44,8 @@ export interface ArenaOptions {
   seed?: number;
   /** Maximum waves before the run is won. Omit for endless survival. */
   maxWaves?: number;
+  /** `survival` (default) or `deathmatch`. */
+  mode?: ArenaMode;
   callbacks: ArenaCallbacks;
 }
 
@@ -54,6 +58,9 @@ interface EnemyView {
   healthBarBg: Phaser.GameObjects.Rectangle;
   archetype: EnemyArchetypeId;
   isBoss: boolean;
+  /** "AI" marker shown only for deathmatch opponents, so they are never
+   * mistaken for human players. */
+  aiTag?: Phaser.GameObjects.Text;
 }
 
 export class ArenaScene extends Phaser.Scene {
@@ -66,6 +73,8 @@ export class ArenaScene extends Phaser.Scene {
   private playerRing!: Phaser.GameObjects.Arc;
   private aimReticle!: Phaser.GameObjects.Graphics;
   private bossBar!: Phaser.GameObjects.Graphics;
+  /** Draws the boss attack telegraph on the ground, under the entities. */
+  private bossTelegraph!: Phaser.GameObjects.Graphics;
   private waveBanner!: Phaser.GameObjects.Container;
 
   private enemyViews = new Map<number, EnemyView>();
@@ -105,6 +114,7 @@ export class ArenaScene extends Phaser.Scene {
       adaptationEnabled: this.options.adaptationEnabled,
       seed: this.options.seed ?? Date.now(),
       ...(this.options.maxWaves === undefined ? {} : { maxWaves: this.options.maxWaves }),
+      ...(this.options.mode === undefined ? {} : { mode: this.options.mode }),
     });
 
     this.buildArena();
@@ -188,6 +198,8 @@ export class ArenaScene extends Phaser.Scene {
 
     this.aimReticle = this.add.graphics().setDepth(11);
     this.bossBar = this.add.graphics().setDepth(60).setScrollFactor(0);
+    // Telegraphs render under the entities so they read as ground markings.
+    this.bossTelegraph = this.add.graphics().setDepth(6);
 
     this.waveBanner = this.createWaveBanner();
   }
@@ -405,7 +417,23 @@ export class ArenaScene extends Phaser.Scene {
       case 'boss_phase':
         audio.play('boss_phase');
         this.cameras.main.shake(600, 0.012);
-        this.showWaveBanner(`EXECUTOR — PHASE ${event.phase}`, 'THREAT ESCALATING');
+        this.cameras.main.flash(200, 120, 20, 30);
+        this.showWaveBanner(`EXECUTOR — PHASE ${event.phase}`, event.phase === 2 ? 'AGGRESSIVE PURSUIT' : event.phase === 3 ? 'FINAL PROTOCOL' : 'RANGED ASSAULT');
+        break;
+      case 'boss_attack':
+        audio.play('boss_attack');
+        this.spawnTelegraphBurst(event.at);
+        break;
+      case 'match_started':
+        audio.play('match_start');
+        this.showWaveBanner('DEATHMATCH', 'FIRST TO ' + this.sim.snapshot().deathmatch?.eliminationTarget);
+        break;
+      case 'opponent_eliminated':
+        audio.play('kill_confirm');
+        break;
+      case 'player_respawned':
+        audio.play('reload_complete');
+        this.cameras.main.flash(160, 40, 90, 140);
         break;
       case 'adaptation_changed':
         audio.play('adaptation');
@@ -475,6 +503,20 @@ export class ArenaScene extends Phaser.Scene {
     });
   }
 
+  /** The visual "release" when a boss attack leaves its telegraph. */
+  private spawnTelegraphBurst(at: Vec2): void {
+    const ring = this.add.circle(at.x, at.y, 20).setStrokeStyle(3, PALETTE.hostile, 0.9).setDepth(13);
+    this.tweens.add({
+      targets: ring,
+      scale: 5,
+      alpha: 0,
+      duration: 380,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+    this.cameras.main.shake(220, 0.01);
+  }
+
   private showWaveBanner(label: string, sub: string): void {
     const labelText = this.waveBanner.getByName('label') as Phaser.GameObjects.Text | null;
     const subText = this.waveBanner.getByName('sub') as Phaser.GameObjects.Text | null;
@@ -498,6 +540,7 @@ export class ArenaScene extends Phaser.Scene {
     this.renderEnemies(snapshot);
     this.renderProjectiles(snapshot);
     this.renderPickups(snapshot);
+    this.renderBossTelegraph(snapshot);
     this.renderBossBar(snapshot);
     this.renderReticle(snapshot);
 
@@ -558,15 +601,26 @@ export class ArenaScene extends Phaser.Scene {
       .setOrigin(0, 0.5);
     healthBar.x = -barWidth / 2;
 
-    const container = this.add.container(enemy.position.x, enemy.position.y, [
-      accent,
-      body,
-      healthBarBg,
-      healthBar,
-    ]);
+    const children: Phaser.GameObjects.GameObject[] = [accent, body, healthBarBg, healthBar];
+
+    // Deathmatch opponents carry an explicit AI tag. This is the visual contract
+    // that the mode is single-player: no opponent is ever presented as a human.
+    let aiTag: Phaser.GameObjects.Text | undefined;
+    if (enemy.isOpponent) {
+      aiTag = this.add
+        .text(0, enemy.radius + 12, 'AI', {
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: '11px',
+          color: '#7fd4ff',
+        })
+        .setOrigin(0.5);
+      children.push(aiTag);
+    }
+
+    const container = this.add.container(enemy.position.x, enemy.position.y, children);
     container.setDepth(enemy.isBoss ? 8 : 7);
 
-    return { container, body, accent, healthBar, healthBarBg, archetype: enemy.archetype, isBoss: enemy.isBoss };
+    return { container, body, accent, healthBar, healthBarBg, archetype: enemy.archetype, isBoss: enemy.isBoss, aiTag };
   }
 
   private updateEnemyView(view: EnemyView, enemy: Enemy): void {
@@ -580,6 +634,7 @@ export class ArenaScene extends Phaser.Scene {
       view.container.setAlpha(1 - progress);
       view.healthBar.setVisible(false);
       view.healthBarBg.setVisible(false);
+      view.aiTag?.setVisible(false);
       return;
     }
 
@@ -686,6 +741,71 @@ export class ArenaScene extends Phaser.Scene {
     this.aimReticle.moveTo(aim.x, aim.y + radius - 2);
     this.aimReticle.lineTo(aim.x, aim.y + radius + 8);
     this.aimReticle.strokePath();
+  }
+
+  /**
+   * Draws the boss attack telegraph.
+   *
+   * The telegraph is the fairness mechanism for the whole boss fight: it shows
+   * the player *which* attack is coming and *how much time* is left to react,
+   * using a shrinking ring plus an attack-specific shape. Nothing here affects
+   * gameplay — the simulation decides everything; this only makes the decision
+   * legible.
+   */
+  private renderBossTelegraph(snapshot: SimulationSnapshot): void {
+    this.bossTelegraph.clear();
+    if (snapshot.bossTelegraphMs <= 0 || !snapshot.bossTelegraphAttack) return;
+
+    const boss = snapshot.enemies.find((enemy) => enemy.isBoss && !enemy.dying);
+    if (!boss) return;
+
+    const kind = snapshot.bossTelegraphAttack;
+    const spec = BOSS_ATTACKS[kind];
+    const progress = 1 - snapshot.bossTelegraphMs / spec.telegraphMs; // 0 → 1
+    const color = kind === 'slam' ? PALETTE.hostile : kind === 'burst' || kind === 'spiral' ? PALETTE.ammo : PALETTE.signal;
+
+    // A ring that shrinks toward the boss as the attack charges, so the player
+    // can read the remaining time at a glance without looking at a number.
+    const ringRadius = boss.radius + 30 + (1 - progress) * 70;
+    this.bossTelegraph.lineStyle(3, color, 0.5 + progress * 0.5);
+    this.bossTelegraph.strokeCircle(boss.position.x, boss.position.y, ringRadius);
+
+    // Attack-specific shape.
+    if (kind === 'volley' || kind === 'lance') {
+      // A lane pointing at the player's last-known direction.
+      const aim = this.sim.playerPos;
+      const angle = Math.atan2(aim.y - boss.position.y, aim.x - boss.position.x);
+      const length = kind === 'lance' ? 520 : 380;
+      this.bossTelegraph.lineStyle(6, color, 0.25 + progress * 0.4);
+      this.bossTelegraph.beginPath();
+      this.bossTelegraph.moveTo(boss.position.x, boss.position.y);
+      this.bossTelegraph.lineTo(
+        boss.position.x + Math.cos(angle) * length,
+        boss.position.y + Math.sin(angle) * length,
+      );
+      this.bossTelegraph.strokePath();
+    } else if (kind === 'slam') {
+      // The area of effect: the whole radius the shockwave will cover.
+      this.bossTelegraph.lineStyle(4, color, 0.3 + progress * 0.5);
+      this.bossTelegraph.strokeCircle(boss.position.x, boss.position.y, 220);
+      this.bossTelegraph.fillStyle(color, 0.06 + progress * 0.1);
+      this.bossTelegraph.fillCircle(boss.position.x, boss.position.y, 220);
+    } else {
+      // Radial attacks: spokes that grow as the attack charges.
+      const spokes = kind === 'spiral' ? 2 : 14;
+      const reach = 80 + progress * 160;
+      this.bossTelegraph.lineStyle(3, color, 0.25 + progress * 0.4);
+      for (let i = 0; i < spokes; i += 1) {
+        const angle = (i / spokes) * Math.PI * 2 + (kind === 'spiral' ? progress * 1.5 : 0);
+        this.bossTelegraph.beginPath();
+        this.bossTelegraph.moveTo(boss.position.x, boss.position.y);
+        this.bossTelegraph.lineTo(
+          boss.position.x + Math.cos(angle) * reach,
+          boss.position.y + Math.sin(angle) * reach,
+        );
+        this.bossTelegraph.strokePath();
+      }
+    }
   }
 
   private renderBossBar(snapshot: SimulationSnapshot): void {
