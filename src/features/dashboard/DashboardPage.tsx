@@ -420,6 +420,30 @@ export function DashboardPage() {
               </p>
             </div>
 
+            <div className="play-block">
+              <div>
+                <p className="eyebrow eyebrow--telemetry">Deathmatch</p>
+                <h2 className="section-title" style={{ marginTop: 'var(--sp-2)' }}>
+                  Timed elimination
+                </h2>
+              </div>
+              <p className="text-2" style={{ fontSize: 'var(--fs-sm)' }}>
+                A timed match against AI-controlled opponents. Reach the elimination target before the
+                clock runs out. Opponents are AI — this is not online multiplayer.
+              </p>
+              <Button
+                variant="telemetry"
+                size="lg"
+                block
+                onClick={() => navigate('/arena?mode=deathmatch')}
+              >
+                ▶ Play deathmatch
+              </Button>
+              <p className="play-block__hint">
+                Same arena, same adaptive AI, same weapon handling — a different objective.
+              </p>
+            </div>
+
             <LoadoutPanel unlocked={data.unlocked} level={statistics.level} />
             <AchievementsPanel achievements={data.achievements} earnedIds={earnedIds} />
 

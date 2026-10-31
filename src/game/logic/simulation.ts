@@ -31,7 +31,24 @@ import {
   previousWeapon,
   type WeaponId,
 } from './weapons';
-import { pickupChance, planWave, waveClearReward, type WavePlan } from './waves';
+import { eligibleArchetypes, pickupChance, planWave, waveClearReward, type WavePlan } from './waves';
+import {
+  BOSS_ATTACKS,
+  BOSS_PHASE_TRANSITION_MS,
+  bossStanceForPhase,
+  chooseBossAttack,
+  nextBossPhase,
+  type BossAttackKind,
+} from './boss';
+import {
+  DEATHMATCH_RULES,
+  createDeathmatchState,
+  recordPlayerDeath,
+  recordPlayerElimination,
+  tickDeathmatch,
+  type DeathmatchRules,
+  type DeathmatchState,
+} from './deathmatch';
 import {
   add,
   angleOf,
@@ -39,6 +56,7 @@ import {
   clampMagnitude,
   distance,
   distanceSq,
+  distanceToSegment,
   fromAngle,
   normalise,
   scale,
@@ -48,6 +66,11 @@ import {
 } from './vec';
 
 /* ── World constants ──────────────────────────────────────────────────────── */
+
+/** Which arena ruleset is running. The services layer has its own identical
+ * `MatchMode`; the game logic keeps a local copy so it never depends upward. */
+export type ArenaMode = 'survival' | 'deathmatch';
+
 
 export const ARENA_WIDTH = 2200;
 export const ARENA_HEIGHT = 1600;
@@ -96,6 +119,18 @@ export interface Enemy {
   deathMs: number;
   /** Set for the boss: current phase, 1–3. */
   phase?: 1 | 2 | 3;
+  /** Boss: milliseconds of wind-up remaining before the pending attack lands.
+   * Zero means no attack is charging. This is the telegraph the player reads. */
+  telegraphMs?: number;
+  /** Boss: the attack currently winding up, or null when idle. */
+  pendingAttack?: BossAttackKind | null;
+  /** Boss: milliseconds remaining in the phase-transition break. */
+  phaseTransitionMs?: number;
+  /** Boss: rotates the pattern so consecutive attacks are not identical. */
+  attackIndex?: number;
+  /** Deathmatch: this hostile is an AI opponent, not a survival hostile. The
+   * renderer labels them, and only opponents count toward the match score. */
+  isOpponent?: boolean;
   isBoss: boolean;
   xpValue: number;
   scoreValue: number;
@@ -123,6 +158,20 @@ export interface Projectile {
 
 export type PickupKind = 'health' | 'ammo';
 
+// The Executor's attack catalogue, phase thresholds and decision functions live
+// in a pure module so they can be unit-tested without a live fight. Re-exported
+// here so existing imports keep working.
+export {
+  BOSS_ATTACKS,
+  BOSS_PHASE_THRESHOLDS,
+  BOSS_PHASE_TRANSITION_MS,
+  bossPhaseForHealth,
+  bossStanceForPhase,
+  chooseBossAttack,
+  nextBossPhase,
+} from './boss';
+export type { BossAttackKind, BossAttackSpec, BossPhase } from './boss';
+
 export interface Pickup {
   id: number;
   kind: PickupKind;
@@ -147,7 +196,15 @@ export type SimulationEvent =
   | { type: 'wave_started'; wave: number; label: string; isBossWave: boolean }
   | { type: 'wave_cleared'; wave: number; xp: number; score: number }
   | { type: 'adaptation_changed'; profile: string; profileName: string; confidence: number; reason: string }
-  | { type: 'boss_phase'; phase: 1 | 2 | 3 }
+  | { type: 'boss_phase'; phase: 1 | 2 | 3; from: 1 | 2 | 3 }
+  /** Fired the instant a boss attack leaves the telegraph and deals its damage. */
+  | { type: 'boss_attack'; attack: BossAttackKind; at: Vec2 }
+  /** Deathmatch: the match clock has started after the countdown. */
+  | { type: 'match_started' }
+  /** Deathmatch: an AI opponent was eliminated by the player. */
+  | { type: 'opponent_eliminated'; total: number }
+  /** Deathmatch: the player re-entered after being downed. */
+  | { type: 'player_respawned' }
   | { type: 'run_ended'; outcome: 'defeat' | 'victory'; wave: number };
 
 export type SimulationEventListener = (event: SimulationEvent) => void;
@@ -183,6 +240,13 @@ export interface SimulationSnapshot {
   bossHealth: number | null;
   bossMaxHealth: number | null;
   bossPhase: 1 | 2 | 3 | null;
+  /** Milliseconds left in the boss's current wind-up, or 0 when it is not
+   * charging an attack. The renderer draws the telegraph from this. */
+  bossTelegraphMs: number;
+  /** The attack being wound up, so the renderer can shape the telegraph. */
+  bossTelegraphAttack: BossAttackKind | null;
+  /** True while the boss is paused for a phase transition. */
+  bossTransitioning: boolean;
   /** Wall-clock-free elapsed run time in milliseconds. */
   elapsedMs: number;
   shotsFired: number;
@@ -196,6 +260,23 @@ export interface SimulationSnapshot {
   adapted: boolean;
   /** Time in milliseconds the player has spent stationary. */
   idleMs: number;
+  /** Which ruleset is running. */
+  mode: ArenaMode;
+  /** Deathmatch match state, or null in survival. */
+  deathmatch: DeathmatchSnapshot | null;
+}
+
+/** The deathmatch subset of a snapshot, for the HUD. */
+export interface DeathmatchSnapshot {
+  phase: 'countdown' | 'active' | 'finished';
+  remainingMs: number;
+  playerEliminations: number;
+  playerDeaths: number;
+  opponentEliminations: number;
+  eliminationTarget: number;
+  /** Milliseconds until the player re-enters, or 0 when on their feet. */
+  playerRespawnMs: number;
+  outcome: 'victory' | 'defeat' | null;
 }
 
 export interface SimulationOptions {
@@ -204,6 +285,23 @@ export interface SimulationOptions {
   adaptationEnabled?: boolean;
   /** Waves are configurable so tests can drive short runs. */
   maxWaves?: number;
+  /**
+   * Begin the run at this wave instead of wave 1. Survival difficulty and the
+   * boss schedule are all derived from the wave number, so this is the single
+   * seam needed to test (or later, to let a player practise) a specific wave.
+   */
+  startWave?: number;
+  /**
+   * When true the player takes no damage. Intended for practice/tutorial runs
+   * and for tests that assert enemy or boss behaviour without the run ending
+   * early. It is never enabled in a scored match.
+   */
+  playerInvulnerable?: boolean;
+  /** `survival` (default) runs waves; `deathmatch` runs a timed match against
+   * AI opponents. Both share every other system. */
+  mode?: ArenaMode;
+  /** Overrides the deathmatch tuning, so tests can run short matches. */
+  deathmatchRules?: DeathmatchRules;
 }
 
 /* ── Simulation ───────────────────────────────────────────────────────────── */
@@ -228,6 +326,16 @@ export class CombatSimulation {
   private readonly director: TacticalDirector;
   private readonly rng: () => number;
   private readonly maxWaves: number;
+  private readonly mode: ArenaMode;
+  private readonly dmRules: DeathmatchRules;
+  private dm: DeathmatchState;
+  /** Milliseconds of *active* match time (excludes the countdown), used to scale
+   * opponent difficulty. `dm.remainingMs` cannot serve this purpose during the
+   * countdown, when it counts down from the countdown length instead. */
+  private dmActiveElapsedMs = 0;
+  /** Deathmatch opponents are enemies, but flagged so they can be told apart
+   * from the player and from survival hostiles in the renderer and the HUD. */
+  private opponentRespawnTimerMs = 0;
 
   private waveNumber = 1;
   private wave: WavePlan;
@@ -250,6 +358,7 @@ export class CombatSimulation {
   private bossDefeated = false;
   private adapted = false;
   private iframeMs = 0;
+  private playerInvulnerable = false;
 
   private nextId = 1;
   private adaptationTimerMs = 0;
@@ -259,10 +368,24 @@ export class CombatSimulation {
     this.player = createPlayerState(options.loadout);
     this.director = new TacticalDirector(options.adaptationEnabled ?? true);
     this.maxWaves = options.maxWaves ?? Number.POSITIVE_INFINITY;
+    this.playerInvulnerable = options.playerInvulnerable ?? false;
     this.rng = createSeededRandom(options.seed ?? Date.now());
     this.traits = this.observer.snapshot();
-    this.wave = planWave(1);
-    this.beginIntermission(1600);
+    this.mode = options.mode ?? 'survival';
+    this.dmRules = options.deathmatchRules ?? DEATHMATCH_RULES;
+    this.dm = createDeathmatchState(this.dmRules);
+    this.waveNumber = Math.max(1, Math.floor(options.startWave ?? 1));
+    this.wave = planWave(this.waveNumber);
+    if (this.mode === 'deathmatch') {
+      // Deathmatch has no waves: the match clock in `dm` drives the mode, and
+      // opponents are topped up by the deathmatch tick rather than a wave queue.
+      this.state = 'active';
+      this.intermissionRemainingMs = 0;
+      this.seedDeathmatchArena();
+    } else {
+      // Survival opens with a short breather before wave 1.
+      this.beginIntermission(1600);
+    }
   }
 
   /* ── Subscriptions ─────────────────────────────────────────────────────── */
@@ -326,6 +449,76 @@ export class CombatSimulation {
     return this.spawnQueue.length + alive;
   }
 
+  /* ── Deathmatch ────────────────────────────────────────────────────────── */
+
+  /** Fills the arena with the opening set of AI opponents. */
+  private seedDeathmatchArena(): void {
+    for (let i = 0; i < this.dmRules.opponentCount; i += 1) {
+      this.spawnOpponent();
+    }
+  }
+
+  /** Spawns one AI opponent, chosen from the archetypes eligible at the
+   * current difficulty and placed away from the player. */
+  private spawnOpponent(): void {
+    // Deathmatch opponents get tougher as the match progresses, mirroring the
+    // survival difficulty curve so the mode is not a flat fight.
+    const progress = Math.min(1, this.dmActiveElapsedMs / Math.max(1, this.dmRules.durationMs));
+    const difficultyWave = 1 + Math.floor(progress * 12);
+    this.waveNumber = difficultyWave;
+    const eligible = eligibleArchetypes(difficultyWave);
+    const archetypeId = pickArchetype(difficultyWave, this.rng, eligible);
+    this.spawnEnemy(archetypeId, this.pickSpawnPosition(), false, true);
+  }
+
+  private aliveOpponentCount(): number {
+    return this.enemies.reduce(
+      (count, enemy) => (enemy.isOpponent && !enemy.dying ? count + 1 : count),
+      0,
+    );
+  }
+
+  /**
+   * Advances the deathmatch clock and reacts to it. Returns true when the match
+   * has ended, so `step` can stop processing the rest of the frame.
+   */
+  private updateDeathmatch(dtMs: number): void {
+    const tick = tickDeathmatch(this.dm, dtMs, this.dmRules, this.aliveOpponentCount());
+
+    if (tick.started) {
+      this.emit({ type: 'match_started' });
+    }
+    // Only active match time counts toward difficulty scaling.
+    if (this.dm.phase === 'active') this.dmActiveElapsedMs += dtMs;
+
+    // Keep the arena populated. A single shared respawn timer paces arrivals so
+    // opponents trickle in rather than appearing as a wall.
+    this.opponentRespawnTimerMs -= dtMs;
+    if (tick.needsOpponent && this.opponentRespawnTimerMs <= 0) {
+      this.spawnOpponent();
+      this.opponentRespawnTimerMs = this.dmRules.respawnDelayMs;
+    }
+
+    // Re-entry after a death: the player is restored and placed safely.
+    if (this.dm.playerRespawnMs === 0 && !this.player.alive && this.dm.phase !== 'finished') {
+      this.respawnPlayer();
+    }
+
+    if (tick.finished) {
+      this.endRun(this.dm.outcome === 'victory' ? 'victory' : 'defeat');
+    }
+  }
+
+  /** Brings the player back after a deathmatch death. */
+  private respawnPlayer(): void {
+    this.player.alive = true;
+    this.player.health = this.player.maxHealth;
+    this.iframeMs = PLAYER_IFRAME_MS * 1.5;
+    // Re-enter at the arena centre, far from wherever the opponents are.
+    this.setPlayerPosition(vec(ARENA_WIDTH / 2, ARENA_HEIGHT / 2));
+    this.emit({ type: 'player_respawned' });
+  }
+
   /* ── Spawning ──────────────────────────────────────────────────────────── */
 
   private aliveEnemyCount(): number {
@@ -370,7 +563,12 @@ export class CombatSimulation {
     this.playerPositionRef = { ...position };
   }
 
-  private spawnEnemy(archetypeId: EnemyArchetypeId, position: Vec2, isBoss = false): Enemy {
+  private spawnEnemy(
+    archetypeId: EnemyArchetypeId,
+    position: Vec2,
+    isBoss = false,
+    isOpponent = false,
+  ): Enemy {
     const archetype = getArchetype(archetypeId);
     const scaled = scaleForWave(archetype, this.waveNumber);
     const applied = applyDirective(archetypeId, this.director.directive);
@@ -397,7 +595,16 @@ export class CombatSimulation {
       xpValue: archetype.xpValue,
       scoreValue: archetype.scoreValue,
       facing: 0,
-      ...(isBoss ? { phase: 1 as const } : {}),
+      ...(isOpponent ? { isOpponent: true } : {}),
+      ...(isBoss
+        ? {
+            phase: 1 as const,
+            telegraphMs: 0,
+            pendingAttack: null,
+            phaseTransitionMs: 0,
+            attackIndex: 0,
+          }
+        : {}),
     };
     this.enemies.push(enemy);
     this.emit({
@@ -425,16 +632,40 @@ export class CombatSimulation {
     this.elapsedMs += dtMs;
     if (this.iframeMs > 0) this.iframeMs = Math.max(0, this.iframeMs - dtMs);
 
+    // Deathmatch countdown: the arena is live (the player can look around) but
+    // frozen — no movement, no combat — so the match starts fair and the
+    // countdown cannot be used to reposition.
+    if (this.mode === 'deathmatch' && this.dm.phase === 'countdown') {
+      this.updateDeathmatch(dtMs);
+      this.observePlayer(dtMs, input);
+      return;
+    }
+
     this.updatePlayerMovement(dt, input);
     this.updateAimingAndFiring(dt, dtMs, input);
     updatePlayer(this.player, dtMs);
 
     if (!this.player.alive) {
-      this.endRun('defeat');
-      return;
+      if (this.mode === 'deathmatch') {
+        // In deathmatch a death is a setback, not the end of the match: count it
+        // and let the deathmatch tick schedule the re-entry. The run only ends
+        // when the clock expires or the elimination target is reached.
+        if (this.dm.playerRespawnMs <= 0) {
+          recordPlayerDeath(this.dm, this.dmRules);
+          this.emit({ type: 'player_died' });
+        }
+      } else {
+        this.endRun('defeat');
+        return;
+      }
     }
 
-    this.updateWaveState(dtMs);
+    if (this.mode === 'deathmatch') {
+      this.updateDeathmatch(dtMs);
+      if (this.isEnded) return;
+    } else {
+      this.updateWaveState(dtMs);
+    }
     this.updateEnemies(dt, dtMs);
     this.updateProjectiles(dt, dtMs);
     this.updatePickups(dtMs);
@@ -456,6 +687,11 @@ export class CombatSimulation {
   private playerVelocity: Vec2 = vec();
 
   private updatePlayerMovement(dt: number, input: SimulationInput): void {
+    // A downed player (deathmatch respawn window) does not move.
+    if (!this.player.alive) {
+      this.playerVelocity = vec();
+      return;
+    }
     const desired = clampMagnitude(input.move, 1);
     const target = scale(desired, PLAYER_SPEED);
     const position = this.playerPositionRef;
@@ -599,7 +835,7 @@ export class CombatSimulation {
       const applied = applyDirective(enemy.archetype, this.director.directive);
       enemy.stance = applied.stance;
       // Boss phases own their own stance, so adaptation never overrides them.
-      if (enemy.isBoss) enemy.stance = this.bossStanceForPhase(enemy.phase ?? 1);
+      if (enemy.isBoss) enemy.stance = bossStanceForPhase(enemy.phase ?? 1);
       enemy.preferredRange = enemy.isBoss
         ? getArchetype(enemy.archetype).preferredRange
         : applied.preferredRange;
@@ -659,16 +895,6 @@ export class CombatSimulation {
 
   /* ── Enemy AI ──────────────────────────────────────────────────────────── */
 
-  private bossStanceForPhase(phase: 1 | 2 | 3): EnemyStance {
-    switch (phase) {
-      case 1:
-        return 'hold';
-      case 2:
-        return 'approach';
-      default:
-        return 'reposition';
-    }
-  }
 
   private updateEnemies(dt: number, dtMs: number): void {
     const playerPos = this.playerPositionRef;
@@ -792,6 +1018,7 @@ export class CombatSimulation {
   }
 
   private damagePlayer(amount: number): void {
+    if (this.playerInvulnerable) return;
     if (this.iframeMs > 0 || !this.player.alive) return;
     const lethal = damagePlayer(this.player, amount);
     this.iframeMs = PLAYER_IFRAME_MS;
@@ -803,12 +1030,22 @@ export class CombatSimulation {
 
   private updateBoss(enemy: Enemy, dt: number, playerPos: Vec2): void {
     const ratio = enemy.health / enemy.maxHealth;
-    const nextPhase: 1 | 2 | 3 = ratio > 0.62 ? 1 : ratio > 0.3 ? 2 : 3;
-    if (nextPhase !== enemy.phase) {
+    const transition = nextBossPhase(enemy.phase ?? 1, ratio);
+
+    if (transition) {
+      const nextPhase = transition.to;
       enemy.phase = nextPhase;
-      enemy.stance = this.bossStanceForPhase(nextPhase);
-      enemy.attackCooldownMs = 400;
-      this.emit({ type: 'boss_phase', phase: nextPhase });
+      enemy.stance = bossStanceForPhase(nextPhase);
+      // A phase change is a *readable event*: the boss stops attacking, stops
+      // moving and winds up visibly, so the player registers the escalation
+      // instead of being killed by a pattern that silently changed underneath
+      // them. Attacks already in flight are left alone.
+      enemy.telegraphMs = 0;
+      enemy.pendingAttack = null;
+      enemy.phaseTransitionMs = BOSS_PHASE_TRANSITION_MS;
+      enemy.attackCooldownMs = BOSS_PHASE_TRANSITION_MS;
+      this.emit({ type: 'boss_phase', phase: nextPhase, from: transition.from });
+      return;
     }
 
     const toPlayer = sub(playerPos, enemy.position);
@@ -817,6 +1054,27 @@ export class CombatSimulation {
     enemy.facing = angleOf(toPlayer);
 
     const phase = enemy.phase ?? 1;
+
+    // ── Phase transition: hold position, ignore the player, telegraph loudly ──
+    if ((enemy.phaseTransitionMs ?? 0) > 0) {
+      enemy.phaseTransitionMs = Math.max(0, (enemy.phaseTransitionMs ?? 0) - dt * 1000);
+      enemy.velocity = vec();
+      return;
+    }
+
+    // ── Wind-up: freeze and charge the pending attack ────────────────────────
+    if ((enemy.telegraphMs ?? 0) > 0) {
+      enemy.telegraphMs = Math.max(0, (enemy.telegraphMs ?? 0) - dt * 1000);
+      // Movement halts during the wind-up so the telegraph is unmistakable and
+      // the attack is aimed at where the player *is*, not where they were.
+      enemy.velocity = vec();
+      if (enemy.telegraphMs === 0) {
+        this.executeBossAttack(enemy, playerPos);
+      }
+      return;
+    }
+
+    // ── Movement ─────────────────────────────────────────────────────────────
     // Phase 1 keeps its distance and fires; phase 2 pursues relentlessly;
     // phase 3 closes, fires area bursts and repositions between them.
     const preferred = phase === 1 ? 320 : phase === 2 ? 90 : 200;
@@ -841,31 +1099,83 @@ export class CombatSimulation {
 
     if (enemy.attackCooldownMs > 0) return;
 
-    if (phase === 1) {
-      // Three-round volley.
-      for (let i = -1; i <= 1; i += 1) {
-        const angle = angleOf(direction) + i * 0.16;
-        this.spawnBossProjectile(enemy, angle, enemy.rangedDamage, 640);
-      }
-      enemy.attackCooldownMs = 1250;
-    } else if (phase === 2) {
-      if (dist <= enemy.radius + PLAYER_RADIUS + 16) {
-        this.damagePlayer(enemy.contactDamage);
-        enemy.attackCooldownMs = 800;
-      } else {
-        this.spawnBossProjectile(enemy, angleOf(direction), enemy.rangedDamage * 0.8, 700);
-        enemy.attackCooldownMs = 900;
-      }
-    } else {
-      // Radial burst: the area attack. Deliberately telegraphed by the cooldown.
-      const count = 14;
-      const base = angleOf(direction);
-      for (let i = 0; i < count; i += 1) {
-        const angle = base + (i / count) * Math.PI * 2;
-        this.spawnBossProjectile(enemy, angle, enemy.rangedDamage * 0.7, 480);
-      }
-      enemy.attackCooldownMs = 2100;
+    // ── Choose the next attack ───────────────────────────────────────────────
+    // Phase 2 additionally has a contact attack when it catches the player, which
+    // is a pursuit punish rather than a projectile.
+    if (phase === 2 && dist <= enemy.radius + PLAYER_RADIUS + 16) {
+      this.damagePlayer(enemy.contactDamage);
+      enemy.attackCooldownMs = 800;
+      return;
     }
+
+    const kind = chooseBossAttack(phase, dist, enemy.attackIndex ?? 0);
+    enemy.attackIndex = (enemy.attackIndex ?? 0) + 1;
+    enemy.pendingAttack = kind;
+    enemy.telegraphMs = BOSS_ATTACKS[kind].telegraphMs;
+    // The cooldown is set when the attack fires, so the telegraph itself is not
+    // counted against the player's recovery window.
+  }
+
+  /** Fires the attack that was winding up. Damage values are unchanged per
+   * phase — only the *pattern* escalates, so the boss never becomes unfair. */
+  private executeBossAttack(enemy: Enemy, playerPos: Vec2): void {
+    const kind = enemy.pendingAttack ?? 'volley';
+    const spec = BOSS_ATTACKS[kind];
+    enemy.pendingAttack = null;
+    enemy.attackCooldownMs = spec.cooldownMs;
+
+    const toPlayer = sub(playerPos, enemy.position);
+    const direction = normalise(toPlayer);
+    const base = angleOf(direction);
+
+    switch (kind) {
+      case 'volley': {
+        // Three-round spread: readable, dodgeable, and it rewards lateral movement.
+        for (let i = -1; i <= 1; i += 1) {
+          this.spawnBossProjectile(enemy, base + i * 0.16, enemy.rangedDamage, 640);
+        }
+        break;
+      }
+      case 'lance': {
+        // A fast, tight single shot during the pursuit.
+        this.spawnBossProjectile(enemy, base, enemy.rangedDamage * 0.8, 700);
+        break;
+      }
+      case 'burst': {
+        // Radial: every direction at once, so the answer is to be far away or
+        // behind cover, not to strafe.
+        const count = 14;
+        for (let i = 0; i < count; i += 1) {
+          this.spawnBossProjectile(enemy, base + (i / count) * Math.PI * 2, enemy.rangedDamage * 0.7, 480);
+        }
+        break;
+      }
+      case 'spiral': {
+        // A rotating pair of arms. Two shots per step, offset by pi, so the
+        // sweep is symmetric and the safe gap rotates predictably.
+        const arms = 2;
+        const steps = 18;
+        for (let i = 0; i < steps; i += 1) {
+          for (let arm = 0; arm < arms; arm += 1) {
+            const angle = base + (i / steps) * Math.PI * 1.5 + (arm / arms) * Math.PI;
+            this.spawnBossProjectile(enemy, angle, enemy.rangedDamage * 0.55, 430);
+          }
+        }
+        break;
+      }
+      case 'slam': {
+        // A radial shockwave plus a persistent warning ring. This is the area
+        // attack: it reaches further than the burst and hits harder, but only
+        // when the player has stayed inside its radius.
+        const count = 22;
+        for (let i = 0; i < count; i += 1) {
+          this.spawnBossProjectile(enemy, (i / count) * Math.PI * 2, enemy.rangedDamage * 0.85, 520);
+        }
+        break;
+      }
+    }
+
+    this.emit({ type: 'boss_attack', attack: kind, at: { ...enemy.position } });
   }
 
   private spawnBossProjectile(enemy: Enemy, angle: number, damage: number, speed: number): void {
@@ -893,6 +1203,7 @@ export class CombatSimulation {
     for (const projectile of this.projectiles) {
       projectile.lifetimeMs -= dtMs;
       const step = scale(projectile.velocity, dt);
+      const previous = projectile.position;
       projectile.position = add(projectile.position, step);
       projectile.travelled += Math.hypot(step.x, step.y);
 
@@ -907,8 +1218,12 @@ export class CombatSimulation {
       if (expired) continue;
 
       if (projectile.owner === 'player') {
-        if (this.resolvePlayerProjectile(projectile)) continue;
-      } else if (this.resolveEnemyProjectile(projectile)) {
+        // Sweep from the player's centre: the muzzle sits a few pixels ahead of
+        // the body, which is far enough to skip a small hostile at contact
+        // range. Starting the segment at the centre guarantees a point-blank
+        // shot connects.
+        if (this.resolvePlayerProjectile(projectile, this.playerPositionRef)) continue;
+      } else if (this.resolveEnemyProjectile(projectile, previous)) {
         continue;
       }
 
@@ -919,12 +1234,14 @@ export class CombatSimulation {
   }
 
   /** Returns true when the projectile should be removed. */
-  private resolvePlayerProjectile(projectile: Projectile): boolean {
+  private resolvePlayerProjectile(projectile: Projectile, from: Vec2): boolean {
     for (const enemy of this.enemies) {
       if (enemy.dying) continue;
       if (projectile.hits.has(enemy.id)) continue;
       const reach = enemy.radius + projectile.radius;
-      if (distanceSq(projectile.position, enemy.position) > reach * reach) continue;
+      // Swept test against the segment the projectile travelled this frame, so a
+      // shot fired point-blank or a fast round cannot skip past a target.
+      if (distanceToSegment(enemy.position, from, projectile.position) > reach) continue;
 
       const damage = damageAtDistance(
         { ...currentWeaponSpec(this.player), damage: projectile.damage },
@@ -939,9 +1256,9 @@ export class CombatSimulation {
   }
 
   /** Returns true when the projectile should be removed. */
-  private resolveEnemyProjectile(projectile: Projectile): boolean {
+  private resolveEnemyProjectile(projectile: Projectile, from: Vec2): boolean {
     const reach = PLAYER_RADIUS + projectile.radius;
-    if (distanceSq(projectile.position, this.playerPositionRef) > reach * reach) return false;
+    if (distanceToSegment(this.playerPositionRef, from, projectile.position) > reach) return false;
     this.damagePlayer(projectile.damage);
     return true;
   }
@@ -981,6 +1298,14 @@ export class CombatSimulation {
         });
       } else {
         this.maybeDropPickup(enemy.position);
+      }
+
+      // Deathmatch: an opponent kill is the scoring event. Killing an opponent
+      // may reach the target, which finishes the match immediately.
+      if (this.mode === 'deathmatch' && enemy.isOpponent) {
+        const finished = recordPlayerElimination(this.dm, this.dmRules);
+        this.emit({ type: 'opponent_eliminated', total: this.dm.playerEliminations });
+        if (finished) this.endRun('victory');
       }
     }
     return lethal;
@@ -1084,6 +1409,9 @@ export class CombatSimulation {
       bossHealth: boss?.health ?? null,
       bossMaxHealth: boss?.maxHealth ?? null,
       bossPhase: boss ? (boss.phase ?? 1) : null,
+      bossTelegraphMs: boss?.telegraphMs ?? 0,
+      bossTelegraphAttack: boss?.pendingAttack ?? null,
+      bossTransitioning: (boss?.phaseTransitionMs ?? 0) > 0,
       elapsedMs: this.elapsedMs,
       shotsFired: this.shotsFired,
       shotsHit: this.shotsHit,
@@ -1092,6 +1420,20 @@ export class CombatSimulation {
       bossDefeated: this.bossDefeated,
       adapted: this.adapted,
       idleMs: this.idleMs,
+      mode: this.mode,
+      deathmatch:
+        this.mode === 'deathmatch'
+          ? {
+              phase: this.dm.phase,
+              remainingMs: this.dm.remainingMs,
+              playerEliminations: this.dm.playerEliminations,
+              playerDeaths: this.dm.playerDeaths,
+              opponentEliminations: this.dm.opponentEliminations,
+              eliminationTarget: this.dmRules.eliminationTarget,
+              playerRespawnMs: this.dm.playerRespawnMs,
+              outcome: this.dm.outcome,
+            }
+          : null,
     };
   }
 

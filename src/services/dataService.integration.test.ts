@@ -123,6 +123,42 @@ describe.skipIf(!reachable)('match submission (live Supabase)', () => {
     expect(replay.newAchievements).toEqual([]);
   }, 30000);
 
+  it('records a deathmatch without corrupting the survival wave statistic', async () => {
+    // A deathmatch reports waveReached 0, because it has no waves. If that were
+    // not so, a deathmatch would silently overwrite `highest_wave`. Earlier
+    // tests in this file may already have set that record, so capture the value
+    // first and assert it is left alone rather than assuming a fresh account.
+    const { data: before } = await client
+      .from('player_statistics')
+      .select('highest_wave')
+      .eq('profile_id', (await client.auth.getUser()).data.user!.id)
+      .single();
+    const highestWaveBefore = (before as { highest_wave: number } | null)?.highest_wave ?? 0;
+
+    const result = await submitMatch({
+      clientMatchId: createUuid(),
+      mode: 'deathmatch',
+      waveReached: 0,
+      eliminations: 25,
+      deaths: 2,
+      damageDealt: 4200,
+      shotsFired: 210,
+      shotsHit: 140,
+      survivalSeconds: 168,
+      outcome: 'victory',
+      bossDefeated: false,
+      adapted: true,
+    });
+
+    expect(result.duplicate).toBe(false);
+    // score = kills*50 + seconds*2 + victory*5000 + deathmatch kills*25
+    expect(result.score).toBe(25 * 50 + 168 * 2 + 5000 + 25 * 25);
+    expect(result.xpAwarded).toBeGreaterThan(0);
+    // The deathmatch must not have moved the survival wave record.
+    expect(result.stats.highest_wave).toBe(highestWaveBefore);
+    expect(result.stats.total_eliminations).toBeGreaterThanOrEqual(25);
+  }, 30000);
+
   it('refuses a payload the database would reject, before the round trip', async () => {
     await expect(
       submitMatch({

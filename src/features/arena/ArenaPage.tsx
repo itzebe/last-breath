@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Panel } from '@/components/ui';
 import { PhaserArena } from './PhaserArena';
 import { CombatHud } from './CombatHud';
@@ -14,8 +14,9 @@ import { fetchUnlockedWeapons } from '@/services/dataService';
 import { isWeaponId, WEAPON_IDS, type WeaponId } from '@/game/logic/weapons';
 import { getAudioEngine, loadAudioSettings } from '@/game/audio';
 import type { ArenaScene } from '@/game/scenes/ArenaScene';
-import type { SimulationSnapshot } from '@/game/logic/simulation';
+import type { ArenaMode, SimulationSnapshot } from '@/game/logic/simulation';
 import { toAppError } from '@/lib/errors';
+import { formatClock } from '@/lib/format';
 import { createUuid } from '@/lib/validation';
 import type { MatchOutcome } from '@/services/types';
 
@@ -39,8 +40,14 @@ const FALLBACK_LOADOUT: WeaponId[] = ['pistol'];
 /** Waves before the run is won. Three boss encounters at 10, 20 and 30. */
 const MAX_WAVES = 30;
 
+function parseMode(value: string | null): ArenaMode {
+  return value === 'deathmatch' ? 'deathmatch' : 'survival';
+}
+
 export function ArenaPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const mode = parseMode(searchParams.get('mode'));
   const { user } = useAuth();
   const isTouch = useIsTouchDevice();
   const isPortrait = useIsPortrait();
@@ -157,6 +164,7 @@ export function ArenaPage() {
       }
 
       const outcome: MatchOutcome = final.outcome === 'victory' ? 'victory' : 'defeat';
+      const isDeathmatch = final.mode === 'deathmatch';
       // The client's own score is never sent. The database derives score and XP
       // from these facts, so a tampered payload can only misreport facts, not
       // fabricate a rank.
@@ -168,10 +176,16 @@ export function ArenaPage() {
       try {
         const result = await submitMatch({
           clientMatchId,
-          mode: 'survival',
-          waveReached: final.waveNumber,
+          mode: final.mode,
+          // Deathmatch has no waves: reporting the difficulty-derived waveNumber
+          // would corrupt `highest_wave`, so it is reported as 0.
+          waveReached: isDeathmatch ? 0 : final.waveNumber,
           eliminations: final.eliminations,
-          deaths: final.outcome === 'victory' ? 0 : 1,
+          deaths: isDeathmatch
+            ? (final.deathmatch?.playerDeaths ?? 0)
+            : final.outcome === 'victory'
+              ? 0
+              : 1,
           damageDealt: Math.round(final.damageDealt),
           shotsFired: final.shotsFired,
           shotsHit: final.shotsHit,
@@ -319,6 +333,7 @@ export function ArenaPage() {
         loadout={loadout}
         adaptationEnabled={adaptationEnabled}
         maxWaves={MAX_WAVES}
+        mode={mode}
         paused={runState === 'paused'}
         onSnapshot={handleSnapshot}
         onRunEnded={handleRunEnded}
@@ -444,7 +459,9 @@ export function ArenaPage() {
           to assistive technology. */}
       <p className="sr-only" role="status" aria-live="polite">
         {snapshot
-          ? `Wave ${snapshot.waveNumber}, ${snapshot.enemiesRemaining} hostiles remaining, health ${Math.round(snapshot.player.health)} of ${snapshot.player.maxHealth}, score ${snapshot.score}.`
+          ? snapshot.deathmatch
+            ? `Deathmatch, ${formatClock(snapshot.deathmatch.remainingMs)} remaining, ${snapshot.deathmatch.playerEliminations} of ${snapshot.deathmatch.eliminationTarget} eliminations, health ${Math.round(snapshot.player.health)} of ${snapshot.player.maxHealth}.`
+            : `Wave ${snapshot.waveNumber}, ${snapshot.enemiesRemaining} hostiles remaining, health ${Math.round(snapshot.player.health)} of ${snapshot.player.maxHealth}, score ${snapshot.score}.`
           : 'Preparing arena.'}
       </p>
     </div>

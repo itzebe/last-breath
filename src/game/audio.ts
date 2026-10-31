@@ -28,8 +28,11 @@ export type SoundName =
   | 'wave_start'
   | 'wave_clear'
   | 'boss_phase'
+  | 'boss_attack'
   | 'adaptation'
   | 'explosion'
+  | 'match_start'
+  | 'kill_confirm'
   | 'victory'
   | 'defeat';
 
@@ -60,8 +63,11 @@ const SOUNDS: Readonly<Record<SoundName, SoundSpec>> = Object.freeze({
   wave_start: { source: 'sawtooth', frequency: 120, endFrequency: 320, durationMs: 620, gain: 0.22, lowpass: 1600 },
   wave_clear: { source: 'sine', frequency: 400, endFrequency: 900, durationMs: 520, gain: 0.22 },
   boss_phase: { source: 'sawtooth', frequency: 90, endFrequency: 240, durationMs: 900, gain: 0.32, lowpass: 900 },
+  boss_attack: { source: 'sawtooth', frequency: 260, endFrequency: 90, durationMs: 340, gain: 0.3, lowpass: 1400 },
   adaptation: { source: 'sine', frequency: 300, endFrequency: 520, durationMs: 380, gain: 0.16 },
   explosion: { source: 'noise', frequency: 1, durationMs: 520, gain: 0.36, lowpass: 900 },
+  match_start: { source: 'sawtooth', frequency: 200, endFrequency: 620, durationMs: 700, gain: 0.26, lowpass: 2000 },
+  kill_confirm: { source: 'square', frequency: 640, endFrequency: 940, durationMs: 130, gain: 0.16 },
   victory: { source: 'sine', frequency: 520, endFrequency: 1040, durationMs: 900, gain: 0.28 },
   defeat: { source: 'sine', frequency: 320, endFrequency: 90, durationMs: 1200, gain: 0.3 },
 });

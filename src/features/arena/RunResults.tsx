@@ -48,10 +48,12 @@ function achievementLabel(id: string): string {
 export function RunResults({ snapshot, submission, onPlayAgain }: RunResultsProps) {
   const navigate = useNavigate();
   const victory = snapshot.outcome === 'victory';
+  const deathmatch = snapshot.deathmatch;
+  const isDeathmatch = snapshot.mode === 'deathmatch';
 
   const facts: MatchFacts = {
-    mode: 'survival',
-    wave: snapshot.waveNumber,
+    mode: snapshot.mode,
+    wave: isDeathmatch ? 0 : snapshot.waveNumber,
     eliminations: snapshot.eliminations,
     survivalSeconds: Math.floor(snapshot.elapsedMs / 1000),
     damageDealt: Math.round(snapshot.damageDealt),
@@ -70,19 +72,34 @@ export function RunResults({ snapshot, submission, onPlayAgain }: RunResultsProp
       <div className="results__card">
         <Panel tone={victory ? 'telemetry' : 'hostile'}>
           <p className="eyebrow eyebrow--signal">
-            {victory ? 'Arena cleared' : 'Operator down'}
+            {victory ? (isDeathmatch ? 'Target reached' : 'Arena cleared') : 'Operator down'}
           </p>
           <h2 className={`results__verdict results__verdict--${victory ? 'victory' : 'defeat'}`}>
-            {victory ? 'Extracted' : 'Killed in action'}
+            {victory ? (isDeathmatch ? 'Match won' : 'Extracted') : 'Killed in action'}
           </h2>
           <p className="text-2" style={{ marginTop: 'var(--sp-3)', fontSize: 'var(--fs-sm)' }}>
-            {victory
-              ? `You survived all ${snapshot.waveNumber} waves and put down the Executor.`
-              : `The arena held. You reached wave ${snapshot.waveNumber}.`}
+            {isDeathmatch
+              ? victory
+                ? `You reached the elimination target with ${deathmatch?.playerEliminations ?? 0} kills.`
+                : `The clock beat you. ${deathmatch?.playerEliminations ?? 0} of ${deathmatch?.eliminationTarget ?? 0} eliminations recorded.`
+              : victory
+                ? `You survived all ${snapshot.waveNumber} waves and put down the Executor.`
+                : `The arena held. You reached wave ${snapshot.waveNumber}.`}
           </p>
 
           <div className="results__grid" style={{ marginTop: 'var(--sp-6)' }}>
-            <Stat label="Wave reached" value={snapshot.waveNumber} tone="signal" />
+            {isDeathmatch ? (
+              <>
+                <Stat
+                  label="Target progress"
+                  value={`${deathmatch?.playerEliminations ?? 0}/${deathmatch?.eliminationTarget ?? 0}`}
+                  tone="hostile"
+                />
+                <Stat label="Deaths" value={deathmatch?.playerDeaths ?? 0} tone="signal" />
+              </>
+            ) : (
+              <Stat label="Wave reached" value={snapshot.waveNumber} tone="signal" />
+            )}
             <Stat label="Eliminations" value={formatNumber(snapshot.eliminations)} tone="hostile" />
             <Stat label="Survival time" value={formatClock(snapshot.elapsedMs)} />
             <Stat

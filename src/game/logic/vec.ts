@@ -88,3 +88,18 @@ export function angleDelta(a: number, b: number): number {
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
+
+/**
+ * Shortest distance from point `p` to the segment `a`–`b`. Used for swept
+ * collision: a projectile that moves further than its own radius in a single
+ * frame must be tested against the segment it travelled, not just its end
+ * point, or fast rounds tunnel through close targets.
+ */
+export function distanceToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const lengthSq = abx * abx + aby * aby;
+  if (lengthSq === 0) return distance(p, a);
+  const t = clamp(((p.x - a.x) * abx + (p.y - a.y) * aby) / lengthSq, 0, 1);
+  return Math.hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t));
+}

@@ -35,7 +35,10 @@ export function planWave(wave: number): WavePlan {
   const isBossWave = BOSS_WAVES.has(n);
 
   const baseEnemies = 5 + Math.round(n * 2.4 + Math.pow(n, 1.35) * 0.55);
-  const totalEnemies = isBossWave ? Math.round(baseEnemies * 0.55) : baseEnemies;
+  // A boss wave is about the boss. Its escort is deliberately light — a quarter
+  // of the normal roster — so the Executor's telegraphs stay legible and the
+  // fight reads as a duel rather than a crowd.
+  const totalEnemies = isBossWave ? Math.round(baseEnemies * 0.25) : baseEnemies;
 
   // Concurrency is capped: beyond ~22 simultaneous bodies the arena stops being
   // legible on a 390px-wide screen, so late waves lean on toughness instead.
