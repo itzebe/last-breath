@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /$
+Disallow: /dashboard
+Disallow: /arena
+Disallow: /play
+Disallow: /reset-password
+Disallow: /auth/

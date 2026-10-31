@@ -1,0 +1,21 @@
+node_modules
+dist
+dist-ssr
+coverage
+*.local
+.env
+.env.local
+.env.*.local
+.DS_Store
+.vercel
+supabase/.temp
+supabase/.branches
+*.log
+.agent_tmp
+.vite
+
+# TypeScript incremental build state
+*.tsbuildinfo
+
+# Agent working memory (session notes, not project content)
+.openhands/

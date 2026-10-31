@@ -1,0 +1,161 @@
+/* ============================================================================
+   LAST BREATH — DESIGN CONSTITUTION (tokens)
+   ----------------------------------------------------------------------------
+   Identity: decommissioned industrial foundry turned combat arena. Everything is
+   machined: hard edges, chamfered corners, etched labels, restrained neon used
+   only as *signal* — never as decoration.
+
+   RULE: a colour means something. If a colour does not encode a state, it is a
+   neutral steel tone.
+   ==========================================================================*/
+
+:root {
+  /* ── TYPOGRAPHY ───────────────────────────────────────────────────────────
+     Display  : condensed industrial grotesque, all-caps, wide tracking.
+     Body     : neutral humanist sans for readable prose.
+     Telemetry: monospace, for anything numeric / machine-reported. */
+  --font-display: 'Chakra Petch', 'Rajdhani', 'Bahnschrift', 'DIN Alternate',
+    'Arial Narrow', system-ui, sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, 'SFMono-Regular',
+    Menlo, Consolas, monospace;
+
+  --fs-2xs: 0.6875rem;  /* 11px — etched micro labels          */
+  --fs-xs:  0.75rem;    /* 12px — telemetry                    */
+  --fs-sm:  0.8125rem;  /* 13px — secondary copy               */
+  --fs-md:  0.9375rem;  /* 15px — body default                 */
+  --fs-lg:  1.0625rem;  /* 17px — lead paragraphs              */
+  --fs-xl:  1.375rem;   /* 22px — panel titles                 */
+  --fs-2xl: 1.75rem;    /* 28px — section titles               */
+  --fs-3xl: clamp(2rem, 1.3rem + 2.6vw, 3rem);
+  --fs-4xl: clamp(2.75rem, 1.2rem + 6.4vw, 6rem);   /* hero wordmark */
+
+  --lh-tight: 1.05;
+  --lh-snug: 1.28;
+  --lh-body: 1.62;
+
+  --tracking-etched: 0.22em;  /* micro labels */
+  --tracking-label: 0.14em;   /* buttons, nav */
+  --tracking-display: -0.01em;
+
+  /* ── COLOUR ROLES ────────────────────────────────────────────────────────
+     Neutral spine (structure) */
+  --void: #04060a;          /* page background, deepest layer  */
+  --abyss: #070b11;         /* section background              */
+  --hull: #0c1219;          /* raised surface / panel          */
+  --plate: #121a24;         /* nested surface / inputs         */
+  --ridge: #1b2634;         /* hairlines on surfaces           */
+  --edge: #2a3a4c;          /* visible borders                 */
+  --edge-strong: #3d5468;   /* hover borders, focus rings base */
+
+  --ink: #e9f0f7;           /* primary text                    */
+  --ink-2: #a8bccd;         /* secondary text                  */
+  --ink-3: #6d8598;         /* muted / meta text               */
+  --ink-4: #4a5f72;         /* disabled                        */
+
+  /* Signal colours — each encodes exactly one state */
+  --signal: #ff6a1f;        /* PRIMARY ACTION + player agency (oxide orange) */
+  --signal-bright: #ff8a45;
+  --signal-deep: #c2450a;
+  --signal-wash: rgba(255, 106, 31, 0.13);
+
+  --hostile: #ff3d4d;       /* enemy / incoming damage / defeat */
+  --hostile-wash: rgba(255, 61, 77, 0.14);
+
+  --telemetry: #2fd8c6;     /* system + AI telemetry (cyan)     */
+  --telemetry-wash: rgba(47, 216, 198, 0.12);
+
+  --vital: #7bf0a0;         /* player health                    */
+  --vital-wash: rgba(123, 240, 160, 0.13);
+
+  --ammo: #ffc247;          /* ammunition / resource scarcity   */
+  --ammo-wash: rgba(255, 194, 71, 0.13);
+
+  --xp: #a06bff;            /* progression (violet)             */
+  --xp-wash: rgba(160, 107, 255, 0.14);
+
+  --ok: #4ad07a;
+  --warn: #ffb020;
+  --danger: #ff3d4d;
+
+  /* ── SPACING (4px base) ──────────────────────────────────────────────────*/
+  --sp-1: 4px;   --sp-2: 8px;   --sp-3: 12px;  --sp-4: 16px;
+  --sp-5: 20px;  --sp-6: 24px;  --sp-7: 32px;  --sp-8: 40px;
+  --sp-9: 48px;  --sp-10: 64px; --sp-11: 80px; --sp-12: 112px;
+
+  /* ── GRID ────────────────────────────────────────────────────────────────*/
+  --shell-max: 1280px;
+  --shell-pad: clamp(1rem, 0.4rem + 2.4vw, 2.5rem);
+  --gutter: clamp(1rem, 0.5rem + 1.4vw, 1.5rem);
+
+  /* ── RADII ───────────────────────────────────────────────────────────────
+     Machinery does not have round corners. Chamfers instead. */
+  --r-xs: 2px;  --r-sm: 3px;  --r-md: 4px;  --r-lg: 6px;  --r-pill: 999px;
+
+  /* Chamfered panel corners (industrial cut) */
+  --chamfer-sm: polygon(0 6px, 6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%);
+  --chamfer-md: polygon(0 12px, 12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
+  --chamfer-cut: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+
+  /* ── SURFACES ────────────────────────────────────────────────────────────
+     Etched steel: a faint top highlight, a hard bottom shadow, no blur. */
+  --surface-0: linear-gradient(180deg, #0a0f16 0%, #060a0f 100%);
+  --surface-1: linear-gradient(180deg, #0f1620 0%, #0b1119 100%);
+  --surface-2: linear-gradient(180deg, #141d28 0%, #101822 100%);
+  --surface-inset: linear-gradient(180deg, #05080c 0%, #080d13 100%);
+
+  /* Hazard stripe — used ONLY for hostile/danger affordances */
+  --hazard: repeating-linear-gradient(
+    -45deg, rgba(255, 61, 77, 0.85) 0 6px, rgba(255, 61, 77, 0) 6px 12px);
+
+  /* Fine engineering grid used behind dark areas */
+  --blueprint: linear-gradient(rgba(47, 216, 198, 0.05) 1px, transparent 1px) 0 0 / 100% 40px,
+    linear-gradient(90deg, rgba(47, 216, 198, 0.05) 1px, transparent 1px) 0 0 / 40px 100%;
+
+  /* ── BORDERS & SHADOWS ───────────────────────────────────────────────────*/
+  --border-hair: 1px solid var(--ridge);
+  --border-line: 1px solid var(--edge);
+  --border-strong: 1px solid var(--edge-strong);
+
+  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 2px 6px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 12px 28px -12px rgba(0, 0, 0, 0.85);
+  --shadow-3: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 28px 64px -24px rgba(0, 0, 0, 0.92);
+
+  --glow-signal: 0 0 0 1px rgba(255, 106, 31, 0.4), 0 0 22px -4px rgba(255, 106, 31, 0.5);
+  --glow-telemetry: 0 0 0 1px rgba(47, 216, 198, 0.38), 0 0 22px -4px rgba(47, 216, 198, 0.45);
+  --glow-hostile: 0 0 0 1px rgba(255, 61, 77, 0.42), 0 0 24px -4px rgba(255, 61, 77, 0.55);
+
+  --focus-ring: 0 0 0 2px var(--void), 0 0 0 4px var(--telemetry), 0 0 0 6px rgba(47, 216, 198, 0.28);
+
+  /* ── MOTION ──────────────────────────────────────────────────────────────
+     Three durations only. Mechanical = fast in, settled out. */
+  --dur-1: 120ms;  /* micro feedback: hover, press        */
+  --dur-2: 200ms;  /* state change: open, fade, slide     */
+  --dur-3: 420ms;  /* entrance: panels, sections          */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-snap: cubic-bezier(0.2, 0.9, 0.2, 1);
+
+  /* ── LAYERS ──────────────────────────────────────────────────────────────*/
+  --z-hud: 20;
+  --z-nav: 60;
+  --z-overlay: 80;
+  --z-modal: 100;
+  --z-toast: 120;
+
+  /* ── TOUCH ───────────────────────────────────────────────────────────────
+     WCAG 2.2 target size (minimum) is 24px; we hold 44px for gameplay
+     controls and 44px for all application affordances. */
+  --touch-min: 44px;
+}
+
+/* ── HOSTILE VARIANT ───────────────────────────────────────────────────────
+   The arena shell swaps the signal colour for hostile red so the interface
+   itself reads as "under attack". */
+[data-theme='combat'] {
+  --signal: #ff3d4d;
+  --signal-bright: #ff6a76;
+  --signal-deep: #b01f2c;
+  --signal-wash: rgba(255, 61, 77, 0.13);
+}
