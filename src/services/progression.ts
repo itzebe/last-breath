@@ -75,12 +75,15 @@ export function levelProgress(totalXp: number): LevelProgress {
  *             + (victory ? 750 : 0) + min(round(sqrt(damage)*2), 400)
  */
 export interface MatchFacts {
-  mode: 'survival' | 'deathmatch';
+  mode: 'survival' | 'deathmatch' | 'operations';
   wave: number;
   eliminations: number;
   survivalSeconds: number;
   damageDealt: number;
-  outcome: 'victory' | 'defeat';
+  outcome: 'victory' | 'defeat' | 'extracted';
+  /** Operations only: objectives completed, and whether extraction succeeded. */
+  objectivesCompleted?: number;
+  extracted?: boolean;
 }
 
 /** Cap applied server-side; mirrored so the preview cannot overstate a reward. */
@@ -92,7 +95,9 @@ export function matchScore(facts: MatchFacts): number {
     Math.max(0, facts.eliminations) * 50 +
     Math.max(0, facts.survivalSeconds) * 2 +
     (facts.outcome === 'victory' ? 5000 : 0) +
-    (facts.mode === 'deathmatch' ? Math.max(0, facts.eliminations) * 25 : 0)
+    (facts.mode === 'deathmatch' ? Math.max(0, facts.eliminations) * 25 : 0) +
+    (facts.mode === 'operations' ? Math.max(0, facts.objectivesCompleted ?? 0) * 600 : 0) +
+    (facts.extracted ? 9000 : 0)
   );
 }
 
@@ -102,6 +107,8 @@ export function matchXp(facts: MatchFacts): number {
     Math.max(0, facts.wave) * 120 +
     Math.min(Math.max(0, facts.survivalSeconds), 3600) / 2 +
     (facts.outcome === 'victory' ? 750 : 0) +
-    Math.min(Math.round(Math.sqrt(Math.max(0, facts.damageDealt)) * 2), 400);
+    Math.min(Math.round(Math.sqrt(Math.max(0, facts.damageDealt)) * 2), 400) +
+    (facts.mode === 'operations' ? Math.max(0, facts.objectivesCompleted ?? 0) * 150 : 0) +
+    (facts.extracted ? 1200 : 0);
   return Math.min(Math.max(Math.round(raw), 0), MAX_MATCH_XP);
 }

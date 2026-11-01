@@ -33,6 +33,14 @@ export type SoundName =
   | 'explosion'
   | 'match_start'
   | 'kill_confirm'
+  | 'dodge'
+  | 'grenade_throw'
+  | 'critical_hit'
+  | 'enemy_alert'
+  | 'mission_start'
+  | 'objective'
+  | 'extraction'
+  | 'upgrade'
   | 'victory'
   | 'defeat';
 
@@ -68,6 +76,18 @@ const SOUNDS: Readonly<Record<SoundName, SoundSpec>> = Object.freeze({
   explosion: { source: 'noise', frequency: 1, durationMs: 520, gain: 0.36, lowpass: 900 },
   match_start: { source: 'sawtooth', frequency: 200, endFrequency: 620, durationMs: 700, gain: 0.26, lowpass: 2000 },
   kill_confirm: { source: 'square', frequency: 640, endFrequency: 940, durationMs: 130, gain: 0.16 },
+  // A dodge is a cloth-and-boot scuff: filtered noise, short, low.
+  dodge: { source: 'noise', frequency: 1, durationMs: 180, gain: 0.14, lowpass: 1400 },
+  grenade_throw: { source: 'square', frequency: 300, endFrequency: 520, durationMs: 140, gain: 0.12 },
+  // A weak-point hit gets its own brighter confirm so it is audible as well as visible.
+  critical_hit: { source: 'sine', frequency: 900, endFrequency: 1500, durationMs: 140, gain: 0.2 },
+  // Hostiles calling out: a short, sharp two-tone alert, deliberately unlike any weapon.
+  enemy_alert: { source: 'sawtooth', frequency: 520, endFrequency: 380, durationMs: 220, gain: 0.16, lowpass: 2200 },
+  mission_start: { source: 'sine', frequency: 260, endFrequency: 640, durationMs: 800, gain: 0.24 },
+  objective: { source: 'sine', frequency: 480, endFrequency: 720, durationMs: 260, gain: 0.18 },
+  // The extraction beep is the clock: it must cut through gunfire.
+  extraction: { source: 'square', frequency: 760, endFrequency: 760, durationMs: 180, gain: 0.2 },
+  upgrade: { source: 'sine', frequency: 560, endFrequency: 1080, durationMs: 420, gain: 0.2 },
   victory: { source: 'sine', frequency: 520, endFrequency: 1040, durationMs: 900, gain: 0.28 },
   defeat: { source: 'sine', frequency: 320, endFrequency: 90, durationMs: 1200, gain: 0.3 },
 });

@@ -21,12 +21,14 @@ import {
   fire,
   grantAmmo,
   healPlayer,
+  setMagazineCapacity,
   switchWeapon,
   updatePlayer,
   type PlayerState,
 } from './player';
 import {
   damageAtDistance,
+  getWeapon,
   nextWeapon,
   previousWeapon,
   type WeaponId,
@@ -64,12 +66,74 @@ import {
   vec,
   type Vec2,
 } from './vec';
+import {
+  ARENA_OBSTACLES,
+  avoidObstacles,
+  circleOverlapsObstacle,
+  coverValueAt,
+  findCover,
+  firstObstacleAlong,
+  hasLineOfSight,
+  resolveCircleAgainstObstacles,
+  type Obstacle,
+} from './obstacles';
+import {
+  MEMORY_MS,
+  REINFORCEMENT_COOLDOWN_MS,
+  REVIVE_CHANNEL_MS,
+  REVIVE_HEALTH_FRACTION,
+  ROLE_FOR_ARCHETYPE,
+  SNIPER_CHARGE_MS,
+  GUNFIRE_HEARING_RADIUS,
+  SQUAD_MIN_SIZE,
+  applySuppression,
+  canBeginSniperCharge,
+  canSeePlayer,
+  COVER_COMMIT_THRESHOLD,
+  clusterSquads,
+  coarseHuntTarget,
+  coverUrgency,
+  createAwareness,
+  electCommander,
+  findReviveTarget,
+  isSearching,
+  movementForRole,
+  shouldCallReinforcements,
+  shouldReload,
+  squadFocusAngles,
+  squadTarget,
+  updateAwareness,
+  type Awareness,
+  type SquadMember,
+  type TacticalRole,
+} from './tactics';
+import {
+  BASE_MODIFIERS,
+  modifiersFor,
+  rollUpgradeOffer,
+  type RunModifiers,
+  type UpgradeId,
+} from './upgrades';
+import {
+  LAST_EXIT,
+  MISSIONS,
+  completedObjectives,
+  createMissionState,
+  currentEncounter,
+  currentObjective,
+  failMission,
+  objectiveInstruction,
+  objectiveProgress,
+  tickMission,
+  type Mission,
+  type MissionState,
+} from './operations';
 
 /* ── World constants ──────────────────────────────────────────────────────── */
 
 /** Which arena ruleset is running. The services layer has its own identical
  * `MatchMode`; the game logic keeps a local copy so it never depends upward. */
-export type ArenaMode = 'survival' | 'deathmatch';
+export type ArenaMode = 'survival' | 'deathmatch' | 'operations';
 
 
 export const ARENA_WIDTH = 2200;
@@ -86,11 +150,66 @@ const PLAYER_ACCELERATION = 14;
 /** Milliseconds of invulnerability after taking a hit. */
 const PLAYER_IFRAME_MS = 550;
 
+/* ── Dodge ────────────────────────────────────────────────────────────────── */
+
+/** Duration of a dodge roll, in milliseconds. */
+export const DODGE_DURATION_MS = 340;
+/** Milliseconds before another roll is permitted, before upgrade modifiers. */
+export const DODGE_COOLDOWN_MS = 1500;
+/** Distance covered by a full roll. */
+export const DODGE_DISTANCE = 190;
+/**
+ * Damage is avoided for this fraction of the roll — the *start*, not the whole
+ * roll. Rolling has to be a read, not a free pass: a player who rolls a beat too
+ * early still gets hit, which is what keeps the mechanic skilful.
+ */
+export const DODGE_INVULN_FRACTION = 0.7;
+
+/* ── Grenades ─────────────────────────────────────────────────────────────── */
+
+/** Grenades carried per run, before any upgrade. */
+export const GRENADE_COUNT = 3;
+/** Milliseconds from throw to detonation. This is the whole fairness window. */
+export const GRENADE_FUSE_MS = 1300;
+/** Milliseconds before another grenade may be thrown. */
+export const GRENADE_COOLDOWN_MS = 900;
+/** Blast radius in arena units, before upgrade modifiers. */
+export const GRENADE_RADIUS = 190;
+/** Damage at the centre of the blast; falls linearly to zero at the edge. */
+export const GRENADE_DAMAGE = 130;
+/** Throw distance at a full charge. */
+export const GRENADE_THROW_RANGE = 460;
+
+/* ── Weak points ──────────────────────────────────────────────────────────── */
+
+/** Base chance of a weak-point hit with no upgrade taken. */
+export const BASE_CRIT_CHANCE = 0.05;
+/** Damage multiplier applied on a weak-point hit. */
+export const CRIT_DAMAGE_MULTIPLIER = 3;
+
+/* ── Combo ────────────────────────────────────────────────────────────────── */
+
+/** Milliseconds after a kill in which the next kill continues the streak. */
+export const COMBO_WINDOW_MS = 3500;
+/** Score multiplier added per combo step, capped. */
+export const COMBO_SCORE_STEP = 0.12;
+/** The highest score multiplier a streak can reach. */
+export const MAX_COMBO_MULTIPLIER = 3;
+
 const PROJECTILE_LIFETIME_MS = 2400;
 const PICKUP_RADIUS = 18;
 const HEALTH_PICKUP_AMOUNT = 28;
 /** Reach of a contact attack, measured centre to centre. */
 const CONTACT_REACH = 6;
+/** Rounds a hostile carries before it must reload. Deliberately small so reload
+ * windows are a real, exploitable part of every firefight. */
+const ENEMY_MAGAZINE = 8;
+/** Milliseconds a hostile spends reloading. */
+const ENEMY_RELOAD_MS = 1500;
+/** Damage a near miss does to a hostile's composure, in suppression terms. */
+const SUPPRESSION_NEAR_MISS_RADIUS = 46;
+/** How long a downed hostile stays revivable by a medic. */
+const REVIVE_WINDOW_MS = 8000;
 
 /* ── Entity shapes ────────────────────────────────────────────────────────── */
 
@@ -136,6 +255,45 @@ export interface Enemy {
   scoreValue: number;
   /** Last known heading, used for rendering orientation. */
   facing: number;
+
+  /* ── Tactical AI (Part 3) ─────────────────────────────────────────────── */
+
+  /** What this hostile is trying to do, derived from its archetype. */
+  role: TacticalRole;
+  /** What it currently believes about the player. Never the true position
+   * unless it can see them — see `tactics.ts`. */
+  awareness: Awareness;
+  /** Milliseconds of suppression remaining. Suppressed hostiles break for cover. */
+  suppressionMs: number;
+  /** Set when this hostile is the elected commander of its squad. */
+  isCommander: boolean;
+  /** The squad this hostile belongs to this frame, for coordination. */
+  squadId: number;
+  /** Milliseconds until this hostile may call reinforcements again. */
+  reinforcementCooldownMs: number;
+  /** How many times this commander has called reinforcements. */
+  reinforcementsCalled: number;
+  /** Where this hostile is moving to for cover, or null. */
+  coverTarget: Vec2 | null;
+  /** Milliseconds remaining on a sniper's visible aim charge, or 0. */
+  chargeMs: number;
+  /** The direction a charging sniper has locked in. Firing uses this, so moving
+   * during the telegraph genuinely avoids the shot. */
+  chargeDirection: number;
+  /** Rounds left before this hostile must reload. */
+  ammoInMagazine: number;
+  /** Magazine capacity, copied from the archetype at spawn. */
+  magazine: number;
+  /** Milliseconds remaining in a hostile reload, or 0. */
+  reloadRemainingMs: number;
+  /** Id of the ally this medic is currently reviving, or null. */
+  reviveTargetId: number | null;
+  /** Milliseconds of revive channel accumulated on `reviveTargetId`. */
+  reviveProgressMs: number;
+  /** True once this hostile has been killed and is being revived. */
+  downed?: boolean;
+  /** Milliseconds a downed hostile remains revivable before it is gone for good. */
+  downedMs?: number;
 }
 
 export interface Projectile {
@@ -154,6 +312,23 @@ export interface Projectile {
   piercing: boolean;
   /** Ids already hit, so a piercing round cannot hit the same body twice. */
   hits: Set<number>;
+  /** True when this round was a weak-point strike. Drives the hit feedback. */
+  critical?: boolean;
+}
+
+/** A thrown grenade, in flight or waiting out its fuse. */
+export interface Grenade {
+  id: number;
+  position: Vec2;
+  /** Velocity at the moment of the throw; decays to zero (it is thrown, not fired). */
+  velocity: Vec2;
+  /** Milliseconds until detonation. */
+  fuseMs: number;
+  /** Blast radius, already including upgrade modifiers. */
+  radius: number;
+  damage: number;
+  /** True for a detonation triggered by a frag round rather than a throw. */
+  fromFrag: boolean;
 }
 
 export type PickupKind = 'health' | 'ammo';
@@ -205,6 +380,36 @@ export type SimulationEvent =
   | { type: 'opponent_eliminated'; total: number }
   /** Deathmatch: the player re-entered after being downed. */
   | { type: 'player_respawned' }
+  /** The player began a dodge roll. */
+  | { type: 'dodge'; at: Vec2; angle: number }
+  /** A grenade was thrown. */
+  | { type: 'grenade_thrown'; at: Vec2; target: Vec2 }
+  /** A grenade detonated. `hits` is how many hostiles it damaged. */
+  | { type: 'grenade_exploded'; at: Vec2; radius: number; hits: number }
+  /** A weak-point strike landed. */
+  | { type: 'critical_hit'; enemyId: number; at: Vec2; damage: number }
+  /** The player's kill streak changed. `multiplier` is the current score bonus. */
+  | { type: 'combo'; streak: number; multiplier: number }
+  /** The streak ended without the next kill landing in time. */
+  | { type: 'combo_ended'; streak: number }
+  /** An enemy commander called in reinforcements. */
+  | { type: 'reinforcements_called'; enemyId: number; at: Vec2; count: number }
+  /** A medic finished reviving a downed ally. */
+  | { type: 'ally_revived'; enemyId: number; medicId: number; at: Vec2 }
+  /** A hostile lost sight of the player and began searching. */
+  | { type: 'enemy_searching'; enemyId: number; at: Vec2 }
+  /** Three upgrades are on offer between encounters. */
+  | { type: 'upgrade_offer'; options: UpgradeId[] }
+  /** An upgrade was taken. */
+  | { type: 'upgrade_taken'; upgrade: UpgradeId }
+  /** Operations: the mission briefing has been shown and the mission begins. */
+  | { type: 'mission_started'; missionId: string; codename: string }
+  /** Operations: the active objective changed. */
+  | { type: 'objective_changed'; label: string; detail: string; index: number; total: number }
+  /** Operations: the extraction countdown began. */
+  | { type: 'extraction_started'; at: Vec2; durationMs: number }
+  /** Operations: the player left the extraction zone and the clock is running down. */
+  | { type: 'extraction_lost' }
   | { type: 'run_ended'; outcome: 'defeat' | 'victory'; wave: number };
 
 export type SimulationEventListener = (event: SimulationEvent) => void;
@@ -216,6 +421,12 @@ export interface SimulationInput {
   aim: Vec2 | null;
   /** True while the fire control is held. */
   firing: boolean;
+  /** One-shot: true on the frame the dodge control is pressed. */
+  dodge?: boolean;
+  /** One-shot: true on the frame the grenade control is pressed. */
+  grenade?: boolean;
+  /** Where a thrown grenade should land. Falls back to the aim point. */
+  grenadeTarget?: Vec2 | null;
 }
 
 export interface SimulationSnapshot {
@@ -264,6 +475,81 @@ export interface SimulationSnapshot {
   mode: ArenaMode;
   /** Deathmatch match state, or null in survival. */
   deathmatch: DeathmatchSnapshot | null;
+
+  /* ── Combat mechanics (Part 3) ─────────────────────────────────────────── */
+
+  /** Dodge state, for the HUD's cooldown ring. */
+  dodge: DodgeSnapshot;
+  /** Grenades remaining and the throw cooldown. */
+  grenades: GrenadeSnapshot;
+  /** The current kill streak and its score multiplier. */
+  combo: ComboSnapshot;
+  /** Run modifiers from upgrades taken so far. */
+  modifiers: RunModifiers;
+  /** Upgrade cards taken this run, in order. */
+  upgrades: readonly UpgradeId[];
+  /** Cards currently on offer, or empty when none are. */
+  upgradeOffer: readonly UpgradeId[];
+  /** True while an upgrade choice is pending — the arena is paused for it. */
+  awaitingUpgrade: boolean;
+  /** Operations mission state, or null outside that mode. */
+  mission: MissionSnapshot | null;
+  /** The obstacles the renderer should draw. */
+  obstacles: readonly Obstacle[];
+}
+
+export interface DodgeSnapshot {
+  /** True while the player is mid-roll. */
+  rolling: boolean;
+  /** Milliseconds until the next roll is permitted, or 0 when ready. */
+  cooldownMs: number;
+  /** Cooldown length after modifiers, so the HUD can draw a fraction. */
+  cooldownTotalMs: number;
+  /** True while the roll is actually avoiding damage. */
+  invulnerable: boolean;
+}
+
+export interface GrenadeSnapshot {
+  remaining: number;
+  cooldownMs: number;
+  /** Milliseconds until the next throw is permitted, or 0 when ready. */
+  cooldownRemainingMs: number;
+}
+
+export interface ComboSnapshot {
+  streak: number;
+  multiplier: number;
+  /** Milliseconds left to land the next kill before the streak resets. */
+  windowRemainingMs: number;
+}
+
+export interface MissionSnapshot {
+  id: string;
+  codename: string;
+  name: string;
+  briefing: string;
+  phase: MissionState['phase'];
+  /** 1-based, for display. */
+  objectiveIndex: number;
+  /**
+   * How many objectives have actually been completed (0-based count). This is
+   * the value scoring and submission use — it is not the display index above.
+   */
+  objectivesCompleted: number;
+  objectiveTotal: number;
+  objectiveLabel: string;
+  objectiveDetail: string;
+  objectiveInstruction: string;
+  objectiveProgress: number;
+  /** Where the objective is anchored, if positional. */
+  objectivePosition: Vec2 | null;
+  objectiveRadius: number | null;
+  /** Milliseconds left on the extraction countdown, or 0. */
+  extractionRemainingMs: number;
+  inExtractionZone: boolean;
+  encounterIntro: string | null;
+  /** True while the player is standing in an interaction/extraction zone. */
+  holdingPosition: boolean;
 }
 
 /** The deathmatch subset of a snapshot, for the HUD. */
@@ -298,10 +584,20 @@ export interface SimulationOptions {
    */
   playerInvulnerable?: boolean;
   /** `survival` (default) runs waves; `deathmatch` runs a timed match against
-   * AI opponents. Both share every other system. */
+   * AI opponents; `operations` runs a mission. All share every other system. */
   mode?: ArenaMode;
   /** Overrides the deathmatch tuning, so tests can run short matches. */
   deathmatchRules?: DeathmatchRules;
+  /** Operations: which mission to run. Defaults to OPERATION: LAST EXIT. */
+  missionId?: string;
+  /**
+   * When true the player starts with the three-choice upgrade offer between
+   * encounters. Off by default so the scored survival mode keeps its exact
+   * Part 2 balance; Operations turns it on.
+   */
+  upgradesEnabled?: boolean;
+  /** Overrides the arena cover layout, so tests can use an open arena. */
+  obstacles?: readonly Obstacle[];
 }
 
 /* ── Simulation ───────────────────────────────────────────────────────────── */
@@ -329,6 +625,46 @@ export class CombatSimulation {
   private readonly mode: ArenaMode;
   private readonly dmRules: DeathmatchRules;
   private dm: DeathmatchState;
+  /** The cover layout this run is using. Tests can substitute an open arena. */
+  private readonly obstacles: readonly Obstacle[];
+
+  /* ── Combat mechanics (Part 3) ─────────────────────────────────────────── */
+
+  private grenades: Grenade[] = [];
+  private grenadesRemaining = GRENADE_COUNT;
+  private grenadeCooldownMs = 0;
+  /** Milliseconds remaining in the current roll, or 0. */
+  private dodgeRemainingMs = 0;
+  private dodgeCooldownMs = 0;
+  /** Direction locked in at the start of the roll. */
+  private dodgeDirection = vec(0, -1);
+  /** Milliseconds of damage-avoidance remaining inside the current roll. */
+  private dodgeInvulnMs = 0;
+  /** Current kill streak and the clock left to extend it. */
+  private comboStreak = 0;
+  private comboWindowMs = 0;
+  private readonly upgradeEnabled: boolean;
+  private upgradesTaken: UpgradeId[] = [];
+  private upgradeOffer: UpgradeId[] = [];
+  /** How many times an upgrade has been offered, for rarity scaling. */
+  private upgradeRolls = 0;
+  private pendingUpgrade = false;
+  private modifiers: RunModifiers = { ...BASE_MODIFIERS };
+
+  /* ── Operations ────────────────────────────────────────────────────────── */
+
+  private readonly mission: Mission | null;
+  private missionState: MissionState | null;
+  /** Ids of the mission encounter currently spawning, if any. */
+  private missionSpawnQueue: string[] = [];
+  private missionSpawnTimerMs = 0;
+  /** True once the extraction countdown has been announced. */
+  private extractionAnnounced = false;
+  /** Kills accumulated in the run, mirrored from `eliminations` for clarity. */
+  private lastMissionKills = 0;
+  /** Hostiles revived by medics, so the results screen can report it. */
+  private revives = 0;
+
   /** Milliseconds of *active* match time (excludes the countdown), used to scale
    * opponent difficulty. `dm.remainingMs` cannot serve this purpose during the
    * countdown, when it counts down from the countdown length instead. */
@@ -374,6 +710,10 @@ export class CombatSimulation {
     this.mode = options.mode ?? 'survival';
     this.dmRules = options.deathmatchRules ?? DEATHMATCH_RULES;
     this.dm = createDeathmatchState(this.dmRules);
+    this.obstacles = options.obstacles ?? ARENA_OBSTACLES;
+    this.upgradeEnabled = options.upgradesEnabled ?? false;
+    this.mission = this.mode === 'operations' ? (MISSIONS[options.missionId ?? LAST_EXIT.id] ?? LAST_EXIT) : null;
+    this.missionState = this.mission ? createMissionState(this.mission) : null;
     this.waveNumber = Math.max(1, Math.floor(options.startWave ?? 1));
     this.wave = planWave(this.waveNumber);
     if (this.mode === 'deathmatch') {
@@ -382,6 +722,15 @@ export class CombatSimulation {
       this.state = 'active';
       this.intermissionRemainingMs = 0;
       this.seedDeathmatchArena();
+    } else if (this.mode === 'operations') {
+      // Operations drives its own encounter schedule; the wave machinery is idle.
+      this.state = 'active';
+      this.intermissionRemainingMs = 0;
+      this.emit({
+        type: 'mission_started',
+        missionId: this.mission!.id,
+        codename: this.mission!.codename,
+      });
     } else {
       // Survival opens with a short breather before wave 1.
       this.beginIntermission(1600);
@@ -595,6 +944,22 @@ export class CombatSimulation {
       xpValue: archetype.xpValue,
       scoreValue: archetype.scoreValue,
       facing: 0,
+      // ── Tactical AI ───────────────────────────────────────────────────────
+      role: ROLE_FOR_ARCHETYPE[archetypeId],
+      awareness: createAwareness(),
+      suppressionMs: 0,
+      isCommander: false,
+      squadId: -1,
+      reinforcementCooldownMs: 0,
+      reinforcementsCalled: 0,
+      coverTarget: null,
+      chargeMs: 0,
+      chargeDirection: 0,
+      ammoInMagazine: ENEMY_MAGAZINE,
+      magazine: ENEMY_MAGAZINE,
+      reloadRemainingMs: 0,
+      reviveTargetId: null,
+      reviveProgressMs: 0,
       ...(isOpponent ? { isOpponent: true } : {}),
       ...(isBoss
         ? {
@@ -629,6 +994,11 @@ export class CombatSimulation {
     const dt = Math.min(dtMs, 100) / 1000;
     if (this.state === 'ended') return;
 
+    // An upgrade choice freezes the arena. The simulation still *exists* — the
+    // snapshot is readable — but nothing advances, so the player cannot be shot
+    // while reading the cards and cannot bank the pause as a tactical advantage.
+    if (this.pendingUpgrade) return;
+
     this.elapsedMs += dtMs;
     if (this.iframeMs > 0) this.iframeMs = Math.max(0, this.iframeMs - dtMs);
 
@@ -641,9 +1011,12 @@ export class CombatSimulation {
       return;
     }
 
+    this.handlePlayerAbilities(dt, dtMs, input);
     this.updatePlayerMovement(dt, input);
     this.updateAimingAndFiring(dt, dtMs, input);
     updatePlayer(this.player, dtMs);
+    this.updateGrenades(dtMs);
+    this.updateCombo(dtMs);
 
     if (!this.player.alive) {
       if (this.mode === 'deathmatch') {
@@ -663,6 +1036,9 @@ export class CombatSimulation {
     if (this.mode === 'deathmatch') {
       this.updateDeathmatch(dtMs);
       if (this.isEnded) return;
+    } else if (this.mode === 'operations') {
+      this.updateMission(dtMs);
+      if (this.isEnded) return;
     } else {
       this.updateWaveState(dtMs);
     }
@@ -676,7 +1052,218 @@ export class CombatSimulation {
     for (const enemy of this.enemies) {
       if (enemy.hitFlashMs > 0) enemy.hitFlashMs = Math.max(0, enemy.hitFlashMs - dtMs);
       if (enemy.dying) enemy.deathMs += dtMs;
+      // A downed hostile is retired once the revive window lapses, so a medic
+      // that never arrives does not leave a permanent body on the floor.
+      if (enemy.downed) {
+        enemy.downedMs = Math.max(0, (enemy.downedMs ?? 0) - dtMs);
+        if (enemy.downedMs === 0) {
+          enemy.downed = false;
+          enemy.dying = true;
+          enemy.deathMs = 0;
+        }
+      }
     }
+  }
+
+  /* ── Player abilities (dodge and grenade) ──────────────────────────────── */
+
+  private handlePlayerAbilities(dt: number, dtMs: number, input: SimulationInput): void {
+    if (this.dodgeCooldownMs > 0) this.dodgeCooldownMs = Math.max(0, this.dodgeCooldownMs - dtMs);
+    if (this.dodgeRemainingMs > 0) {
+      this.dodgeRemainingMs = Math.max(0, this.dodgeRemainingMs - dtMs);
+      this.dodgeInvulnMs = Math.max(0, this.dodgeInvulnMs - dtMs);
+    }
+    // A grenade throw is its own one-shot input; it is resolved here so the
+    // cooldown and the ammo count are advanced in the same place as the roll's.
+    if (input.grenade && this.player.alive) {
+      const target = input.grenadeTarget ?? input.aim;
+      if (target) this.throwGrenade(target);
+    }
+    void dt;
+
+    if (!input.dodge || !this.player.alive) return;
+    if (this.dodgeRemainingMs > 0 || this.dodgeCooldownMs > 0) return;
+
+    // The roll goes in the direction the player is *steering*, falling back to
+    // the aim direction and then to the facing, so a roll always goes somewhere
+    // the player intended.
+    const steer = clampMagnitude(input.move, 1);
+    const direction =
+      Math.hypot(steer.x, steer.y) > 0.15
+        ? normalise(steer)
+        : input.aim
+          ? normalise(sub(input.aim, this.playerPositionRef))
+          : fromAngle(this.playerFacing, 1);
+
+    this.dodgeDirection = direction;
+    this.dodgeRemainingMs = DODGE_DURATION_MS;
+    this.dodgeInvulnMs = DODGE_DURATION_MS * DODGE_INVULN_FRACTION;
+    this.dodgeCooldownMs = DODGE_COOLDOWN_MS * this.modifiers.dodgeCooldownMultiplier;
+    this.emit({ type: 'dodge', at: { ...this.playerPositionRef }, angle: angleOf(direction) });
+  }
+
+  /* ── Operations ────────────────────────────────────────────────────────── */
+
+  /**
+   * Advances the mission and drives its encounter spawner.
+   *
+   * The spawner is deliberately *additive*: the mission tells the arena which
+   * hostiles to send and how fast, but every hostile is created through the same
+   * `spawnEnemy` path the other modes use. There is no second enemy system.
+   */
+  private updateMission(dtMs: number): void {
+    const mission = this.mission;
+    const state = this.missionState;
+    if (!mission || !state) return;
+
+    // ── Spawn the active encounter ──────────────────────────────────────────
+    const encounter = currentEncounter(mission, state);
+    if (encounter) {
+      const alive = this.aliveEnemyCount();
+      this.missionSpawnTimerMs -= dtMs;
+      if (
+        this.missionSpawnQueue.length > 0 &&
+        this.missionSpawnTimerMs <= 0 &&
+        alive < encounter.maxConcurrent
+      ) {
+        const archetype = this.missionSpawnQueue.shift()!;
+        const position = this.pickSpawnPosition();
+        this.spawnEnemy(archetype as EnemyArchetypeId, position);
+        state.spawned += 1;
+        this.missionSpawnTimerMs = encounter.spawnIntervalMs;
+      }
+    }
+
+    // ── Tick the objective state machine ────────────────────────────────────
+    const result = tickMission(mission, state, {
+      dtMs,
+      killsThisFrame: this.eliminations - this.lastMissionKills,
+      playerPosition: this.playerPositionRef,
+      encounterCleared: this.missionSpawnQueue.length === 0 && this.aliveEnemyCount() === 0,
+    });
+    this.lastMissionKills = this.eliminations;
+
+    if (result.encounterStarted) {
+      const next = currentEncounter(mission, state);
+      if (next) {
+        // Scale the encounter by the player's own progress so a fast run is not
+        // punished with a weak finish and a slow one is not overwhelmed.
+        this.missionSpawnQueue = [...next.enemies];
+        this.missionSpawnTimerMs = 0;
+        this.emit({
+          type: 'wave_started',
+          wave: state.encounterIndex + 1,
+          label: next.intro,
+          isBossWave: false,
+        });
+        // Between encounters, Operations offers a field upgrade. The offer
+        // freezes the arena (see `step`), so it is a genuine decision made
+        // between fights rather than a card read mid-firefight. The first
+        // encounter offers too, which gives the player a build choice up front.
+        if (this.upgradeEnabled && !this.pendingUpgrade) this.offerUpgrades();
+      }
+    }
+
+    if (result.objectiveAdvanced) {
+      const objective = currentObjective(mission, state);
+      if (objective) {
+        this.emit({
+          type: 'objective_changed',
+          label: objective.label,
+          detail: objective.detail ?? '',
+          index: state.objectiveIndex + 1,
+          total: mission.objectives.length,
+        });
+      }
+      if (objective?.kind === 'extract') {
+        this.extractionAnnounced = true;
+        this.emit({
+          type: 'extraction_started',
+          at: objective.position ?? this.playerPositionRef,
+          durationMs: mission.extractionMs,
+        });
+      }
+    }
+
+    // Extraction left: warn once so the HUD can flash.
+    if (this.extractionAnnounced && state.phase === 'extraction' && state.extractionAwayMs > 0) {
+      this.extractionAnnounced = false;
+      this.emit({ type: 'extraction_lost' });
+    }
+
+    if (result.failed) {
+      failMission(state);
+      this.endRun('defeat');
+      return;
+    }
+    if (result.extracted) {
+      this.endRun('victory');
+    }
+  }
+
+  /* ── Upgrades ──────────────────────────────────────────────────────────── */
+
+  /**
+   * Offers three upgrades. Called by the arena between encounters when the
+   * `upgradesEnabled` option is on. Returns the cards on offer.
+   */
+  offerUpgrades(): UpgradeId[] {
+    if (!this.upgradeEnabled) return [];
+    this.upgradeRolls += 1;
+    this.upgradeOffer = rollUpgradeOffer(this.upgradesTaken, this.upgradeRolls, this.rng);
+    this.pendingUpgrade = this.upgradeOffer.length > 0;
+    if (this.pendingUpgrade) this.emit({ type: 'upgrade_offer', options: [...this.upgradeOffer] });
+    return [...this.upgradeOffer];
+  }
+
+  /**
+   * Takes one of the offered upgrades.
+   *
+   * Refuses any card that was not actually on offer, so the client cannot inject
+   * an arbitrary upgrade — the same principle as never trusting a submitted
+   * score.
+   */
+  chooseUpgrade(id: UpgradeId): boolean {
+    if (!this.pendingUpgrade) return false;
+    if (!this.upgradeOffer.includes(id)) return false;
+
+    this.upgradesTaken.push(id);
+    this.modifiers = modifiersFor(this.upgradesTaken);
+    this.applyModifiersToLoadout();
+    this.pendingUpgrade = false;
+    this.upgradeOffer = [];
+    this.emit({ type: 'upgrade_taken', upgrade: id });
+    return true;
+  }
+
+  /** Pushes the current modifier set onto the things that read it at spawn time. */
+  private applyModifiersToLoadout(): void {
+    for (const weapon of this.player.loadout) {
+      const base = getWeapon(weapon);
+      setMagazineCapacity(this.player, weapon, base.magazine * this.modifiers.magazineMultiplier);
+    }
+  }
+
+  /** True when a dodge roll can be started right now (not rolling, off cooldown). */
+  get canDodge(): boolean {
+    return this.dodgeRemainingMs <= 0 && this.dodgeCooldownMs <= 0 && this.player.alive && !this.pendingUpgrade;
+  }
+
+  /** True when a grenade can be thrown right now. */
+  get canThrowGrenade(): boolean {
+    return this.grenadesRemaining > 0 && this.grenadeCooldownMs <= 0 && this.player.alive && !this.pendingUpgrade;
+  }
+
+  get upgrades(): readonly UpgradeId[] {
+    return this.upgradesTaken;
+  }
+
+  get upgradeOptions(): readonly UpgradeId[] {
+    return this.upgradeOffer;
+  }
+
+  get isAwaitingUpgrade(): boolean {
+    return this.pendingUpgrade;
   }
 
   /* ── Player ────────────────────────────────────────────────────────────── */
@@ -684,34 +1271,62 @@ export class CombatSimulation {
   /** Current player velocity, integrated from input. Kept separate from the
    * position so acceleration is frame-rate independent and the movement feel is
    * consistent across refresh rates. */
-  private playerVelocity: Vec2 = vec();
+  private playerVelocityRef: Vec2 = vec();
 
   private updatePlayerMovement(dt: number, input: SimulationInput): void {
     // A downed player (deathmatch respawn window) does not move.
     if (!this.player.alive) {
-      this.playerVelocity = vec();
+      this.playerVelocityRef = vec();
       return;
     }
+
+    // ── Dodge roll ──────────────────────────────────────────────────────────
+    // A roll overrides normal movement completely: the player travels a fixed
+    // distance in the direction locked in at the start, and cannot steer. That
+    // commitment is what makes the mechanic a decision rather than a teleport.
+    if (this.dodgeRemainingMs > 0) {
+      const progress = 1 - this.dodgeRemainingMs / DODGE_DURATION_MS;
+      // Ease-out: fast at the start, settling at the end.
+      const speed = (DODGE_DISTANCE / (DODGE_DURATION_MS / 1000)) * (1.6 - progress);
+      this.playerVelocityRef = scale(this.dodgeDirection, speed);
+      const next = add(this.playerPositionRef, scale(this.playerVelocityRef, dt));
+      this.playerPositionRef = this.clampPlayerPosition(this.resolvePlayerCollisions(next));
+      this.playerFacing = angleOf(this.dodgeDirection);
+      return;
+    }
+
     const desired = clampMagnitude(input.move, 1);
-    const target = scale(desired, PLAYER_SPEED);
+    const target = scale(desired, PLAYER_SPEED * this.modifiers.speedMultiplier);
     const position = this.playerPositionRef;
 
     // Exponential approach: the fraction of the remaining gap closed this frame
     // depends only on elapsed time, so 30fps and 144fps feel identical.
     const blend = 1 - Math.exp(-PLAYER_ACCELERATION * dt);
-    this.playerVelocity = {
-      x: this.playerVelocity.x + (target.x - this.playerVelocity.x) * blend,
-      y: this.playerVelocity.y + (target.y - this.playerVelocity.y) * blend,
+    this.playerVelocityRef = {
+      x: this.playerVelocityRef.x + (target.x - this.playerVelocityRef.x) * blend,
+      y: this.playerVelocityRef.y + (target.y - this.playerVelocityRef.y) * blend,
     };
 
     const next = {
-      x: position.x + this.playerVelocity.x * dt,
-      y: position.y + this.playerVelocity.y * dt,
+      x: position.x + this.playerVelocityRef.x * dt,
+      y: position.y + this.playerVelocityRef.y * dt,
     };
 
-    const clampedX = clamp(next.x, WALL_MARGIN + PLAYER_RADIUS, ARENA_WIDTH - WALL_MARGIN - PLAYER_RADIUS);
-    const clampedY = clamp(next.y, WALL_MARGIN + PLAYER_RADIUS, ARENA_HEIGHT - WALL_MARGIN - PLAYER_RADIUS);
-    this.playerPositionRef = vec(clampedX, clampedY);
+    this.playerPositionRef = this.clampPlayerPosition(this.resolvePlayerCollisions(next));
+  }
+
+  /** Keeps the player inside the arena walls. */
+  private clampPlayerPosition(position: Vec2): Vec2 {
+    return vec(
+      clamp(position.x, WALL_MARGIN + PLAYER_RADIUS, ARENA_WIDTH - WALL_MARGIN - PLAYER_RADIUS),
+      clamp(position.y, WALL_MARGIN + PLAYER_RADIUS, ARENA_HEIGHT - WALL_MARGIN - PLAYER_RADIUS),
+    );
+  }
+
+  /** Slides the player out of any cover they have walked into. */
+  private resolvePlayerCollisions(position: Vec2): Vec2 {
+    if (this.obstacles.length === 0) return position;
+    return resolveCircleAgainstObstacles(position, PLAYER_RADIUS, this.obstacles);
   }
 
   private playerFacing = 0;
@@ -744,9 +1359,28 @@ export class CombatSimulation {
       pellets: result.pellets,
     });
 
+    // Gunfire is loud. Hostiles within earshot learn the player's *sector* —
+    // never a precise fix — which is enough to start converging on a player who
+    // is holding a corridor, and keeps a shootout from happening in a vacuum.
+    // This is deliberately coarser than sight: hearing cannot be aimed with, and
+    // it still has to be confirmed visually before a hostile can fire.
+    for (const enemy of this.enemies) {
+      if (enemy.dying || enemy.isBoss) continue;
+      if (distance(enemy.position, position) > GUNFIRE_HEARING_RADIUS) continue;
+      if (enemy.awareness.lastKnown) continue;
+      enemy.awareness = {
+        lastKnown: coarseHuntTarget(position),
+        msSinceSeen: MEMORY_MS,
+        everSeen: enemy.awareness.everSeen,
+      };
+    }
+
     // Spread is applied per pellet; a single-pellet weapon still gets its
     // nominal spread so accuracy is never perfect.
     const totalSpread = (spec.spreadDeg * Math.PI) / 180;
+    // Upgrades that widen or tighten the gun are applied here so the projectile
+    // carries the modified damage rather than the caller having to remember.
+    const damage = spec.damage * this.modifiers.damageMultiplier;
     for (let i = 0; i < result.pellets; i += 1) {
       const offset =
         result.pellets === 1
@@ -758,7 +1392,7 @@ export class CombatSimulation {
         owner: 'player',
         position: add(position, fromAngle(angle, PLAYER_RADIUS + 6)),
         velocity: fromAngle(angle, spec.projectileSpeed),
-        damage: spec.damage,
+        damage,
         radius: spec.projectileRadius,
         travelled: 0,
         lifetimeMs: PROJECTILE_LIFETIME_MS,
@@ -899,69 +1533,292 @@ export class CombatSimulation {
   private updateEnemies(dt: number, dtMs: number): void {
     const playerPos = this.playerPositionRef;
 
+    // ── Squad coordination ───────────────────────────────────────────────────
+    // Rebuilt every frame from the *current* positions, so a squad is a
+    // situational fact: hostiles that drift apart stop coordinating and
+    // hostiles that converge start. The commander's memory is shared with its
+    // squad, which is what makes a squad search one place instead of scattering.
+    const squads = this.buildSquads();
+
     for (const enemy of this.enemies) {
       if (enemy.dying) continue;
       if (enemy.attackCooldownMs > 0) enemy.attackCooldownMs -= dtMs;
+      if (enemy.reinforcementCooldownMs > 0) enemy.reinforcementCooldownMs -= dtMs;
+      if (enemy.suppressionMs > 0) enemy.suppressionMs = Math.max(0, enemy.suppressionMs - dtMs);
 
       if (enemy.isBoss) {
         this.updateBoss(enemy, dt, playerPos);
         continue;
       }
 
-      const toPlayer = sub(playerPos, enemy.position);
-      const dist = Math.max(1, Math.hypot(toPlayer.x, toPlayer.y));
-      const direction = scale(toPlayer, 1 / dist);
-      enemy.facing = angleOf(toPlayer);
-
-      // `encircle` uses approachOffset so a group spreads into an arc rather
-      // than stacking into a single-file queue.
-      let desired: Vec2 = vec();
-
-      switch (enemy.stance) {
-        case 'approach':
-          desired = direction;
-          break;
-        case 'hold': {
-          const error = dist - enemy.preferredRange;
-          if (Math.abs(error) > 24) desired = scale(direction, Math.sign(error));
-          break;
-        }
-        case 'retreat':
-          desired = scale(direction, -1);
-          break;
-        case 'reposition': {
-          // Strafe perpendicular, correcting range gently.
-          const perpendicular = vec(-direction.y, direction.x);
-          const error = dist - enemy.preferredRange;
-          desired = add(scale(perpendicular, 1), scale(direction, clamp(error / 200, -1, 1)));
-          break;
-        }
-        case 'encircle': {
-          // Approach along an arc offset, tightening as the distance closes.
-          const arc = enemy.approachOffset;
-          const tangent = vec(-direction.y, direction.x);
-          const inward = clamp((dist - enemy.preferredRange) / 260, -0.4, 1);
-          desired = add(scale(direction, inward), scale(tangent, Math.sin(arc) * 0.9));
-          break;
-        }
-      }
-
-      const speed = enemy.speed * (1 + this.director.directive.pressure * 0.15);
-      const desiredVelocity = scale(normalise(desired), speed);
-      const blend = 1 - Math.exp(-9 * dt);
-      enemy.velocity = {
-        x: enemy.velocity.x + (desiredVelocity.x - enemy.velocity.x) * blend,
-        y: enemy.velocity.y + (desiredVelocity.y - enemy.velocity.y) * blend,
-      };
-
-      enemy.position = vec(
-        clamp(enemy.position.x + enemy.velocity.x * dt, WALL_MARGIN, ARENA_WIDTH - WALL_MARGIN),
-        clamp(enemy.position.y + enemy.velocity.y * dt, WALL_MARGIN, ARENA_HEIGHT - WALL_MARGIN),
-      );
-
-      this.resolveEnemySeparation(enemy);
-      this.enemyAttack(enemy, dist);
+      this.updateTacticalEnemy(enemy, dt, dtMs, playerPos, squads);
     }
+  }
+
+  /** Groups living hostiles into squads and elects a commander for each. */
+  private buildSquads(): Map<number, { members: Enemy[]; commander: Enemy | null }> {
+    const living = this.enemies.filter((enemy) => !enemy.dying && !enemy.isBoss);
+    const squadMembers: SquadMember[] = living.map((enemy) => ({
+      id: enemy.id,
+      position: enemy.position,
+      role: enemy.role,
+      health: enemy.health,
+      maxHealth: enemy.maxHealth,
+    }));
+    const clusters = clusterSquads(squadMembers);
+
+    const result = new Map<number, { members: Enemy[]; commander: Enemy | null }>();
+    const byId = new Map(living.map((enemy) => [enemy.id, enemy]));
+
+    clusters.forEach((ids, index) => {
+      const members = ids.map((id) => byId.get(id)).filter((enemy): enemy is Enemy => Boolean(enemy));
+      // A squad needs the minimum size before a commander is elected, so a lone
+      // hostile never pretends to be coordinating with anybody.
+      const commanderId = members.length >= SQUAD_MIN_SIZE ? electCommander(members.map((m) => ({
+        id: m.id,
+        position: m.position,
+        role: m.role,
+        health: m.health,
+        maxHealth: m.maxHealth,
+      }))) : null;
+      const commander = commanderId !== null ? (byId.get(commanderId) ?? null) : null;
+      for (const member of members) member.squadId = index;
+      if (commander) commander.isCommander = true;
+      result.set(index, { members, commander });
+    });
+
+    // Clear the flag on anyone who is no longer a commander, so a squad that
+    // loses its leader does not keep the previous one's aura.
+    for (const enemy of living) {
+      if (!result.get(enemy.squadId)?.commander || result.get(enemy.squadId)!.commander!.id !== enemy.id) {
+        enemy.isCommander = false;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * One frame of tactical behaviour for a single hostile.
+   *
+   * The order is deliberate and mirrors how a soldier actually works:
+   * perceive → decide → move → act. Perception is resolved first because every
+   * later decision depends on it, and it is the only place the player's true
+   * position may enter the AI at all.
+   */
+  private updateTacticalEnemy(
+    enemy: Enemy,
+    dt: number,
+    dtMs: number,
+    playerPos: Vec2,
+    squads: Map<number, { members: Enemy[]; commander: Enemy | null }>,
+  ): void {
+    const distToPlayer = Math.max(1, distance(enemy.position, playerPos));
+
+    // ── 1. Perceive ──────────────────────────────────────────────────────────
+    // `canSee` is the ONLY source of truth about the player's location. A
+    // hostile that cannot see the player acts on `awareness.lastKnown`, which
+    // expires — so it genuinely searches rather than tracking.
+    const canSee =
+      !this.player.alive
+        ? false
+        : canSeePlayer(enemy.position, playerPos, enemy.archetype, this.obstacles);
+    const wasSearching = isSearching(enemy.awareness, MEMORY_MS);
+    enemy.awareness = updateAwareness(enemy.awareness, dtMs, canSee, playerPos, MEMORY_MS);
+    if (!wasSearching && isSearching(enemy.awareness, MEMORY_MS)) {
+      this.emit({ type: 'enemy_searching', enemyId: enemy.id, at: { ...enemy.position } });
+    }
+
+    const squad = squads.get(enemy.squadId);
+    const commanderMemory = squad?.commander && squad.commander.id !== enemy.id ? squad.commander.awareness.lastKnown : null;
+    // With no sight and no memory, a hostile still advances on the sector the
+    // player occupies — it does not stand in a corner waiting to be found. This
+    // is a coarse fallback, not knowledge: it cannot be aimed with, and it is
+    // superseded the moment a real sighting occurs.
+    const hunt = canSee || enemy.awareness.lastKnown ? null : coarseHuntTarget(playerPos);
+    const target = squadTarget(enemy.awareness.lastKnown, commanderMemory, canSee, playerPos) ?? hunt;
+    // A hostile that is closing on a sector rather than a sighting should not be
+    // treated as having line of sight for movement purposes.
+    const hasContact = canSee || enemy.awareness.lastKnown !== null;
+
+    // ── 2. Reload ────────────────────────────────────────────────────────────
+    if (enemy.reloadRemainingMs > 0) {
+      enemy.reloadRemainingMs = Math.max(0, enemy.reloadRemainingMs - dtMs);
+      if (enemy.reloadRemainingMs === 0) enemy.ammoInMagazine = enemy.magazine;
+    } else if (shouldReload(enemy.ammoInMagazine, enemy.magazine, canSee, enemy.reloadRemainingMs)) {
+      enemy.reloadRemainingMs = ENEMY_RELOAD_MS;
+    }
+
+    // ── 3. Medic revive ──────────────────────────────────────────────────────
+    let reviveTarget: Vec2 | null = null;
+    if (enemy.role === 'medic') {
+      const downed = this.enemies.filter(
+        (other) => other !== enemy && other.downed && (other.downedMs ?? 0) > 0,
+      );
+      const pick = findReviveTarget(
+        enemy.position,
+        downed.map((ally) => ({ id: ally.id, position: ally.position })),
+      );
+      if (pick) {
+        reviveTarget = pick.position;
+        if (enemy.reviveTargetId === pick.id) {
+          enemy.reviveProgressMs += dtMs;
+          if (enemy.reviveProgressMs >= REVIVE_CHANNEL_MS) {
+            this.reviveAlly(pick.id, enemy);
+            enemy.reviveTargetId = null;
+            enemy.reviveProgressMs = 0;
+          }
+        } else {
+          enemy.reviveTargetId = pick.id;
+          enemy.reviveProgressMs = 0;
+        }
+      } else {
+        enemy.reviveTargetId = null;
+        enemy.reviveProgressMs = 0;
+      }
+    }
+
+    // ── 4. Commander reinforcement call ──────────────────────────────────────
+    if (enemy.isCommander && target) {
+      const squadSize = squad?.members.filter((m) => !m.dying).length ?? 0;
+      if (shouldCallReinforcements(squadSize, enemy.reinforcementCooldownMs, enemy.reinforcementsCalled)) {
+        enemy.reinforcementsCalled += 1;
+        enemy.reinforcementCooldownMs = REINFORCEMENT_COOLDOWN_MS;
+        this.callReinforcements(enemy, target);
+      }
+    }
+
+    // ── 5. Cover decision ────────────────────────────────────────────────────
+    const underPressure = distToPlayer < 260;
+    const urgency = coverUrgency(enemy.role, {
+      suppressed: enemy.suppressionMs > 0,
+      reloading: enemy.reloadRemainingMs > 0,
+      healthFraction: enemy.maxHealth > 0 ? enemy.health / enemy.maxHealth : 1,
+      underPressure,
+    });
+    // Only look for cover when it matters, and only re-evaluate periodically —
+    // cover seeking is expensive, so it is throttled rather than run per frame.
+    if (target && urgency >= COVER_COMMIT_THRESHOLD) {
+      if (!enemy.coverTarget) {
+        const cover = findCover(enemy.position, target, this.obstacles, enemy.radius, 320);
+        enemy.coverTarget = cover && cover.value > 0.25 ? cover.position : null;
+      } else if (coverValueAt(enemy.coverTarget, target, this.obstacles) <= 0.05) {
+        // The cover stopped working (the player moved); drop it.
+        enemy.coverTarget = null;
+      }
+    } else {
+      enemy.coverTarget = null;
+    }
+
+    // ── 6. Movement ──────────────────────────────────────────────────────────
+    const facingTarget = target ?? this.lastKnownOrFacing(enemy);
+    const toTarget = sub(facingTarget, enemy.position);
+    const distToTarget = Math.max(1, Math.hypot(toTarget.x, toTarget.y));
+    enemy.facing = angleOf(toTarget);
+
+    const intent = movementForRole(enemy.role, {
+      position: enemy.position,
+      target: facingTarget,
+      // A hostile with a live sighting or a memory is acting on real knowledge;
+      // one that has neither is following the coarse sector fallback. Both move,
+      // but only the former is "on target" for the role doctrines that need it.
+      hasSight: hasContact,
+      distanceToTarget: distToTarget,
+      preferredRange: enemy.preferredRange,
+      approachOffset: enemy.approachOffset + this.squadAngleOffset(enemy, squad),
+      coverPosition: enemy.coverTarget,
+      reviveTarget,
+    });
+
+    // Steer around cover rather than into it. The avoidance blend is applied to
+    // the *desired* direction, so a hostile rounds a pillar smoothly.
+    let desiredDirection = intent.desiredDirection;
+    if (intent.moving && Math.hypot(desiredDirection.x, desiredDirection.y) > 0.01) {
+      desiredDirection = avoidObstacles(enemy.position, desiredDirection, this.obstacles, enemy.radius);
+    }
+
+    const speed = intent.moving ? enemy.speed * (1 + this.director.directive.pressure * 0.15) : 0;
+    const desiredVelocity = scale(desiredDirection, speed);
+    const blend = 1 - Math.exp(-9 * dt);
+    enemy.velocity = {
+      x: enemy.velocity.x + (desiredVelocity.x - enemy.velocity.x) * blend,
+      y: enemy.velocity.y + (desiredVelocity.y - enemy.velocity.y) * blend,
+    };
+
+    const moved = vec(
+      enemy.position.x + enemy.velocity.x * dt,
+      enemy.position.y + enemy.velocity.y * dt,
+    );
+    const clampedMove = vec(
+      clamp(moved.x, WALL_MARGIN + enemy.radius, ARENA_WIDTH - WALL_MARGIN - enemy.radius),
+      clamp(moved.y, WALL_MARGIN + enemy.radius, ARENA_HEIGHT - WALL_MARGIN - enemy.radius),
+    );
+    enemy.position = resolveCircleAgainstObstacles(clampedMove, enemy.radius, this.obstacles);
+
+    this.resolveEnemySeparation(enemy);
+
+    // ── 7. Act ───────────────────────────────────────────────────────────────
+    this.enemyAttack(enemy, distToPlayer, canSee, playerPos);
+  }
+
+  /** The shared squad focus offset for this hostile, so a squad fans out. */
+  private squadAngleOffset(enemy: Enemy, squad: { members: Enemy[]; commander: Enemy | null } | undefined): number {
+    if (!squad || squad.members.length < 2 || !squad.commander) return 0;
+    const index = squad.members.findIndex((member) => member.id === enemy.id);
+    if (index < 0) return 0;
+    const angles = squadFocusAngles(squad.members.length);
+    return angles[index] ?? 0;
+  }
+
+  /** The fallback facing when a hostile has no target at all. */
+  private lastKnownOrFacing(enemy: Enemy): Vec2 {
+    return enemy.awareness.lastKnown ?? add(enemy.position, fromAngle(enemy.facing, 100));
+  }
+
+  /** A commander's call: spawn a small escort around the squad. */
+  private callReinforcements(enemy: Enemy, target: Vec2): void {
+    const count = 2;
+    for (let i = 0; i < count; i += 1) {
+      const angle = (i / count) * Math.PI * 2;
+      const spawnAt = this.findFreeSpawn(add(enemy.position, fromAngle(angle, 140)), 20);
+      // Reinforcements are always basic infantry: a commander extends a fight,
+      // it does not escalate it into an unwinnable one.
+      const id = this.rng() < 0.5 ? 'rusher' : 'flanker';
+      this.spawnEnemy(id, spawnAt);
+    }
+    this.emit({ type: 'reinforcements_called', enemyId: enemy.id, at: { ...enemy.position }, count });
+    void target;
+  }
+
+  /** Brings a downed hostile back at partial health. */
+  private reviveAlly(id: number, medic: Enemy): void {
+    const ally = this.enemies.find((other) => other.id === id);
+    if (!ally || !ally.downed) return;
+    ally.downed = false;
+    ally.downedMs = 0;
+    ally.dying = false;
+    ally.deathMs = 0;
+    ally.health = Math.max(1, Math.round(ally.maxHealth * REVIVE_HEALTH_FRACTION));
+    ally.awareness = createAwareness();
+    this.revives += 1;
+    this.emit({ type: 'ally_revived', enemyId: id, medicId: medic.id, at: { ...ally.position } });
+  }
+
+  /** Picks a spawn point near `around` that is not inside cover. */
+  private findFreeSpawn(around: Vec2, radius: number): Vec2 {
+    let candidate = this.clampToArena(around, radius);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const blocked = this.obstacles.some((obstacle) => circleOverlapsObstacle(candidate, radius, obstacle));
+      if (!blocked) return candidate;
+      candidate = this.clampToArena(add(candidate, fromAngle(this.rng() * Math.PI * 2, 70)), radius);
+    }
+    return candidate;
+  }
+
+  private clampToArena(position: Vec2, radius: number): Vec2 {
+    return vec(
+      clamp(position.x, WALL_MARGIN + radius, ARENA_WIDTH - WALL_MARGIN - radius),
+      clamp(position.y, WALL_MARGIN + radius, ARENA_HEIGHT - WALL_MARGIN - radius),
+    );
   }
 
   /** Keeps hostiles from stacking into a single point. */
@@ -982,47 +1839,99 @@ export class CombatSimulation {
     }
   }
 
-  private enemyAttack(enemy: Enemy, dist: number): void {
-    if (enemy.attackCooldownMs > 0) return;
+  /**
+   * A hostile's attack decision.
+   *
+   * Three rules make this fair rather than punishing:
+   *  - **It must be able to see the player.** A shot through a wall is the
+   *    single most obvious way an AI cheats, so `canSee` gates every branch.
+   *  - **It must have a round.** Reloading is a real, exploitable window.
+   *  - **Dangerous shots telegraph.** The marksman charges visibly before firing
+   *    and the charge direction is locked in, so moving genuinely avoids it.
+   */
+  private enemyAttack(enemy: Enemy, dist: number, canSee: boolean, playerPos: Vec2): void {
     const archetype = getArchetype(enemy.archetype);
 
-    // Melee: only when genuinely touching the player.
+    // ── A charging sniper: resolve the charge, whether or not it still sees ──
+    if (enemy.chargeMs > 0) {
+      enemy.chargeMs = Math.max(0, enemy.chargeMs - 1000 / 60);
+      // Aiming continues while the player is visible, so a stationary target is
+      // punished but a moving one can break the line.
+      if (canSee) enemy.chargeDirection = angleOf(sub(playerPos, enemy.position));
+      if (enemy.chargeMs === 0) {
+        this.fireEnemyRound(enemy, archetype, enemy.chargeDirection);
+      }
+      return;
+    }
+
+    if (enemy.reloadRemainingMs > 0) return;
+    if (!canSee) return;
+    if (enemy.attackCooldownMs > 0) return;
+
+    // Melee: only when genuinely touching the player. This is checked before any
+    // range gate, because a melee-only archetype has a ranged range of zero and
+    // a range gate would reject its only attack at every distance.
     if (dist <= enemy.radius + PLAYER_RADIUS + CONTACT_REACH) {
       this.damagePlayer(enemy.contactDamage);
       enemy.attackCooldownMs = archetype.attackCooldownMs;
       return;
     }
 
-    // Ranged: only inside the archetype's ranged envelope, and only when the
-    // hostile is not mid-approach (so shots read as deliberate).
+    // Ranged: only inside the archetype's envelope, and only when the hostile is
+    // not mid-approach (so shots read as deliberate).
     if (archetype.rangedDamage > 0 && dist <= archetype.rangedRange && dist > 80) {
-      const direction = normalise(sub(this.playerPositionRef, enemy.position));
+      if (enemy.ammoInMagazine <= 0) {
+        enemy.reloadRemainingMs = ENEMY_RELOAD_MS;
+        return;
+      }
+
+      // The marksman charges: this is the telegraph the player reads.
+      if (enemy.role === 'sniper' && canBeginSniperCharge(canSee, dist, enemy.attackCooldownMs)) {
+        enemy.chargeMs = SNIPER_CHARGE_MS;
+        enemy.chargeDirection = angleOf(sub(playerPos, enemy.position));
+        return;
+      }
+
+      const direction = normalise(sub(playerPos, enemy.position));
       const spread = (2.4 * Math.PI) / 180;
       const angle = angleOf(direction) + (this.rng() - 0.5) * spread;
-      this.projectiles.push({
-        id: this.nextId++,
-        owner: 'enemy',
-        position: add(enemy.position, fromAngle(angle, enemy.radius + 4)),
-        velocity: fromAngle(angle, archetype.rangedSpeed),
-        damage: enemy.rangedDamage,
-        radius: 4,
-        travelled: 0,
-        lifetimeMs: PROJECTILE_LIFETIME_MS,
-        effectiveRange: archetype.rangedRange * 1.3,
-        color: 0xff7a6a,
-        piercing: false,
-        hits: new Set<number>(),
-      });
-      enemy.attackCooldownMs = archetype.attackCooldownMs;
+      this.fireEnemyRound(enemy, archetype, angle);
     }
+  }
+
+  /** Spawns one enemy round and charges the hostile's ammunition. */
+  private fireEnemyRound(enemy: Enemy, archetype: ReturnType<typeof getArchetype>, angle: number): void {
+    this.projectiles.push({
+      id: this.nextId++,
+      owner: 'enemy',
+      position: add(enemy.position, fromAngle(angle, enemy.radius + 4)),
+      velocity: fromAngle(angle, archetype.rangedSpeed),
+      damage: enemy.rangedDamage,
+      radius: 4,
+      travelled: 0,
+      lifetimeMs: PROJECTILE_LIFETIME_MS,
+      effectiveRange: archetype.rangedRange * 1.3,
+      color: 0xff7a6a,
+      piercing: false,
+      hits: new Set<number>(),
+    });
+    enemy.ammoInMagazine = Math.max(0, enemy.ammoInMagazine - 1);
+    enemy.attackCooldownMs = archetype.attackCooldownMs;
   }
 
   private damagePlayer(amount: number): void {
     if (this.playerInvulnerable) return;
-    if (this.iframeMs > 0 || !this.player.alive) return;
-    const lethal = damagePlayer(this.player, amount);
+    if (!this.player.alive) return;
+    // A dodge roll avoids damage for the early part of the roll. The window is
+    // bounded deliberately: rolling early still gets you hit, so the mechanic
+    // rewards reading the attack rather than spamming the button.
+    if (this.dodgeInvulnMs > 0) return;
+    if (this.iframeMs > 0) return;
+
+    const reduced = amount * this.modifiers.damageTakenMultiplier;
+    const lethal = damagePlayer(this.player, reduced);
     this.iframeMs = PLAYER_IFRAME_MS;
-    this.emit({ type: 'player_hit', damage: amount, health: this.player.health });
+    this.emit({ type: 'player_hit', damage: reduced, health: this.player.health });
     if (lethal) this.emit({ type: 'player_died' });
   }
 
@@ -1217,7 +2126,17 @@ export class CombatSimulation {
 
       if (expired) continue;
 
+      // Cover stops rounds. This is checked against the segment travelled, so a
+      // fast round cannot tunnel through a wall, and it is the same geometry the
+      // line-of-sight check uses — a hostile that cannot see through a crate
+      // also cannot shoot through it.
+      if (this.projectileHitsCover(previous, projectile.position)) continue;
+
       if (projectile.owner === 'player') {
+        // A round that passes close to a hostile rattles it. This is what
+        // suppression *is* — volume of fire making the enemy keep its head down,
+        // which is why it is caused by player fire and not by other hostiles'.
+        this.applyNearMissSuppression(previous, projectile.position);
         // Sweep from the player's centre: the muzzle sits a few pixels ahead of
         // the body, which is far enough to skip a small hostile at contact
         // range. Starting the segment at the centre guarantees a point-blank
@@ -1233,6 +2152,20 @@ export class CombatSimulation {
     this.projectiles = survivors;
   }
 
+  /** True when the segment a projectile travelled this frame crosses cover. */
+  private projectileHitsCover(from: Vec2, to: Vec2): boolean {
+    return firstObstacleAlong(from, to, this.obstacles, 0) !== null;
+  }
+
+  /** Suppresses hostiles a player round passed close to. */
+  private applyNearMissSuppression(from: Vec2, to: Vec2): void {
+    for (const enemy of this.enemies) {
+      if (enemy.dying || enemy.isBoss) continue;
+      if (distanceToSegment(enemy.position, from, to) > enemy.radius + SUPPRESSION_NEAR_MISS_RADIUS) continue;
+      enemy.suppressionMs = applySuppression(enemy.suppressionMs, true);
+    }
+  }
+
   /** Returns true when the projectile should be removed. */
   private resolvePlayerProjectile(projectile: Projectile, from: Vec2): boolean {
     for (const enemy of this.enemies) {
@@ -1243,12 +2176,23 @@ export class CombatSimulation {
       // shot fired point-blank or a fast round cannot skip past a target.
       if (distanceToSegment(enemy.position, from, projectile.position) > reach) continue;
 
-      const damage = damageAtDistance(
+      const base = damageAtDistance(
         { ...currentWeaponSpec(this.player), damage: projectile.damage },
         projectile.travelled,
       );
+
+      // Weak-point strike. The chance comes from upgrades; with none taken there
+      // is still a small base chance, so the mechanic exists from the first run.
+      const critChance = BASE_CRIT_CHANCE + this.modifiers.critChance;
+      const critical = this.rng() < critChance;
+      const damage = critical ? base * this.modifiers.critMultiplier : base;
+
       const lethal = this.damageEnemy(enemy, damage, projectile.position);
       projectile.hits.add(enemy.id);
+      if (critical) {
+        projectile.critical = true;
+        this.emit({ type: 'critical_hit', enemyId: enemy.id, at: { ...projectile.position }, damage });
+      }
       if (!projectile.piercing) return true;
       if (lethal) continue;
     }
@@ -1267,6 +2211,7 @@ export class CombatSimulation {
     if (enemy.dying) return false;
     enemy.health = Math.max(0, enemy.health - damage);
     enemy.hitFlashMs = 90;
+    enemy.suppressionMs = applySuppression(enemy.suppressionMs, true);
     this.damageDealt += damage;
     this.shotsHit += 1;
 
@@ -1274,20 +2219,37 @@ export class CombatSimulation {
     this.emit({ type: 'enemy_hit', enemyId: enemy.id, damage, at: { ...at }, lethal });
 
     if (lethal) {
-      enemy.dying = true;
-      enemy.deathMs = 0;
       this.eliminations += 1;
-      this.score += enemy.scoreValue;
-      this.waveScore += enemy.scoreValue;
+      const streakMultiplier = this.registerKill();
+      const score = Math.round(enemy.scoreValue * streakMultiplier);
+      this.score += score;
+      this.waveScore += score;
       this.waveXp += enemy.xpValue;
+
+      // A medic can bring an ally back, so a killed hostile is not removed
+      // immediately: it is `downed` and revivable for a window. The renderer
+      // draws it as a casualty; the removal pass retires it once that expires.
+      const revivable = !enemy.isBoss && this.canBeRevived(enemy);
+      if (revivable) {
+        enemy.downed = true;
+        enemy.downedMs = REVIVE_WINDOW_MS;
+        enemy.health = 0;
+        enemy.velocity = vec();
+        enemy.chargeMs = 0;
+      } else {
+        enemy.dying = true;
+        enemy.deathMs = 0;
+      }
+
       this.emit({
         type: 'enemy_died',
         enemyId: enemy.id,
         archetype: enemy.archetype,
         at: { ...enemy.position },
         xp: enemy.xpValue,
-        score: enemy.scoreValue,
+        score,
       });
+
       if (enemy.isBoss) {
         this.bossDefeated = true;
         this.pickups.push({
@@ -1298,6 +2260,16 @@ export class CombatSimulation {
         });
       } else {
         this.maybeDropPickup(enemy.position);
+      }
+
+      // Frag rounds: a kill has a chance to detonate in a small blast.
+      if (!enemy.isBoss && this.modifiers.fragChance > 0 && this.rng() < this.modifiers.fragChance) {
+        this.detonate(
+          { ...enemy.position },
+          GRENADE_RADIUS * 0.6 * this.modifiers.blastRadiusMultiplier,
+          GRENADE_DAMAGE * 0.5,
+          true,
+        );
       }
 
       // Deathmatch: an opponent kill is the scoring event. Killing an opponent
@@ -1311,6 +2283,43 @@ export class CombatSimulation {
     return lethal;
   }
 
+  /** True when this hostile may be left downed rather than removed outright. */
+  private canBeRevived(enemy: Enemy): boolean {
+    // Only when a living medic exists that could plausibly reach it, so an
+    // unrevivable casualty does not linger and confuse the player.
+    return this.enemies.some(
+      (other) => other.id !== enemy.id && !other.dying && !other.downed && other.role === 'medic',
+    );
+  }
+
+  /**
+   * Records a kill and returns the score multiplier for it.
+   *
+   * The streak is a real scoring mechanic, not decoration: each kill inside the
+   * window raises the multiplier, so sustained aggression is rewarded and a
+   * passive run is not. The multiplier is capped so a lucky run cannot inflate
+   * the score without bound.
+   */
+  private registerKill(): number {
+    this.comboStreak += 1;
+    this.comboWindowMs = COMBO_WINDOW_MS;
+    const multiplier = Math.min(MAX_COMBO_MULTIPLIER, 1 + (this.comboStreak - 1) * COMBO_SCORE_STEP);
+    if (this.comboStreak > 1) {
+      this.emit({ type: 'combo', streak: this.comboStreak, multiplier });
+    }
+    return multiplier;
+  }
+
+  /** Ages the combo window and ends the streak when it lapses. */
+  private updateCombo(dtMs: number): void {
+    if (this.comboStreak === 0) return;
+    this.comboWindowMs = Math.max(0, this.comboWindowMs - dtMs);
+    if (this.comboWindowMs === 0) {
+      if (this.comboStreak >= 3) this.emit({ type: 'combo_ended', streak: this.comboStreak });
+      this.comboStreak = 0;
+    }
+  }
+
   private maybeDropPickup(position: Vec2): void {
     if (this.rng() < pickupChance(this.waveNumber, 'health')) {
       this.pickups.push({ id: this.nextId++, kind: 'health', position: { ...position }, ttlMs: 22000 });
@@ -1319,6 +2328,93 @@ export class CombatSimulation {
     if (this.rng() < pickupChance(this.waveNumber, 'ammo')) {
       this.pickups.push({ id: this.nextId++, kind: 'ammo', position: { ...position }, ttlMs: 22000 });
     }
+  }
+
+  /* ── Grenades ──────────────────────────────────────────────────────────── */
+
+  /** Throws a grenade at (or toward) a point. Returns false when it cannot. */
+  private throwGrenade(target: Vec2): boolean {
+    if (!this.player.alive) return false;
+    if (this.grenadesRemaining <= 0 || this.grenadeCooldownMs > 0) return false;
+
+    const from = this.playerPositionRef;
+    // Clamp the throw to its range so a grenade can never be placed across the
+    // arena, and snap the landing point out of any cover so it does not vanish
+    // inside a crate.
+    const toTarget = sub(target, from);
+    const dist = Math.hypot(toTarget.x, toTarget.y);
+    const clamped = dist > GRENADE_THROW_RANGE ? add(from, scale(normalise(toTarget), GRENADE_THROW_RANGE)) : target;
+    const landing = resolveCircleAgainstObstacles(clamped, 6, this.obstacles);
+
+    const travelMs = GRENADE_FUSE_MS * 0.45;
+    this.grenades.push({
+      id: this.nextId++,
+      position: { ...from },
+      velocity: scale(sub(landing, from), 1000 / travelMs),
+      fuseMs: GRENADE_FUSE_MS,
+      radius: GRENADE_RADIUS * this.modifiers.blastRadiusMultiplier,
+      damage: GRENADE_DAMAGE * this.modifiers.damageMultiplier,
+      fromFrag: false,
+    });
+    this.grenadesRemaining -= 1;
+    this.grenadeCooldownMs = GRENADE_COOLDOWN_MS;
+    this.emit({ type: 'grenade_thrown', at: { ...from }, target: { ...landing } });
+    return true;
+  }
+
+  private updateGrenades(dtMs: number): void {
+    if (this.grenadeCooldownMs > 0) this.grenadeCooldownMs = Math.max(0, this.grenadeCooldownMs - dtMs);
+    if (this.grenades.length === 0) return;
+
+    const survivors: Grenade[] = [];
+    for (const grenade of this.grenades) {
+      grenade.fuseMs -= dtMs;
+      // Flight: the throw decays, so the grenade settles where it was aimed
+      // rather than sliding, and a blast position is predictable.
+      if (Math.hypot(grenade.velocity.x, grenade.velocity.y) > 1) {
+        const dt = dtMs / 1000;
+        const moved = add(grenade.position, scale(grenade.velocity, dt));
+        grenade.position = this.clampToArena(moved, 6);
+        grenade.velocity = scale(grenade.velocity, 1 - Math.min(1, dt * 6));
+      }
+      if (grenade.fuseMs <= 0) {
+        this.detonate(grenade.position, grenade.radius, grenade.damage, grenade.fromFrag);
+        continue;
+      }
+      survivors.push(grenade);
+    }
+    this.grenades = survivors;
+  }
+
+  /**
+   * Resolves a blast.
+   *
+   * Damage falls linearly with distance so the edge of the radius is a real
+   * gradient, not a cliff — that is what makes the drawn radius honest. Cover
+   * does not stop a blast (it is an area effect), but a hostile on the far side
+   * of a wall from the centre takes nothing, which is the one concession to
+   * geometry and keeps the mechanic readable.
+   */
+  private detonate(at: Vec2, radius: number, damage: number, fromFrag: boolean): void {
+    let hits = 0;
+    for (const enemy of this.enemies) {
+      if (enemy.dying) continue;
+      const dist = distance(at, enemy.position);
+      if (dist > radius + enemy.radius) continue;
+      if (!hasLineOfSight(at, enemy.position, this.obstacles)) continue;
+      const falloff = 1 - clamp((dist - enemy.radius) / radius, 0, 1);
+      if (falloff <= 0) continue;
+      this.damageEnemy(enemy, damage * falloff, { ...enemy.position });
+      hits += 1;
+    }
+    // The player is not immune to their own grenade — standing on it hurts.
+    const selfDist = distance(at, this.playerPositionRef);
+    if (selfDist <= radius + PLAYER_RADIUS) {
+      const falloff = 1 - clamp((selfDist - PLAYER_RADIUS) / radius, 0, 1);
+      if (falloff > 0) this.damagePlayer(damage * falloff * 0.5);
+    }
+    this.emit({ type: 'grenade_exploded', at: { ...at }, radius, hits });
+    void fromFrag;
   }
 
   /* ── Pickups ───────────────────────────────────────────────────────────── */
@@ -1344,9 +2440,15 @@ export class CombatSimulation {
 
   requestReload(): boolean {
     if (!this.player.alive) return false;
-    // Imported lazily to keep the module graph flat.
     const outcome = beginReload(this.player);
     if (outcome.started) {
+      // The `quick_hands` upgrade shortens the reload; applying it to the
+      // in-flight timer (rather than to a spec) is what makes the card felt
+      // immediately, including on a reload already under way when it is taken.
+      if (this.modifiers.reloadMultiplier < 1) {
+        const state = this.player.weapons[this.player.weapon];
+        if (state) state.reloadRemainingMs *= this.modifiers.reloadMultiplier;
+      }
       this.reloadStartedThisFrame = true;
       this.emit({ type: 'reload_started', weapon: this.player.weapon, durationMs: outcome.durationMs });
     }
@@ -1434,6 +2536,58 @@ export class CombatSimulation {
               outcome: this.dm.outcome,
             }
           : null,
+      dodge: {
+        rolling: this.dodgeRemainingMs > 0,
+        cooldownMs: this.dodgeCooldownMs,
+        cooldownTotalMs: DODGE_COOLDOWN_MS * this.modifiers.dodgeCooldownMultiplier,
+        invulnerable: this.dodgeInvulnMs > 0,
+      },
+      grenades: {
+        remaining: this.grenadesRemaining,
+        cooldownMs: GRENADE_COOLDOWN_MS,
+        cooldownRemainingMs: this.grenadeCooldownMs,
+      },
+      combo: {
+        streak: this.comboStreak,
+        multiplier: Math.min(MAX_COMBO_MULTIPLIER, 1 + Math.max(0, this.comboStreak - 1) * COMBO_SCORE_STEP),
+        windowRemainingMs: this.comboWindowMs,
+      },
+      modifiers: { ...this.modifiers },
+      upgrades: [...this.upgradesTaken],
+      upgradeOffer: [...this.upgradeOffer],
+      awaitingUpgrade: this.pendingUpgrade,
+      mission: this.missionSnapshot(),
+      obstacles: this.obstacles,
+    };
+  }
+
+  /** The operations subset of a snapshot, or null outside that mode. */
+  private missionSnapshot(): MissionSnapshot | null {
+    const mission = this.mission;
+    const state = this.missionState;
+    if (!mission || !state) return null;
+
+    const objective = currentObjective(mission, state);
+    const encounter = currentEncounter(mission, state);
+    return {
+      id: mission.id,
+      codename: mission.codename,
+      name: mission.name,
+      briefing: mission.briefing,
+      phase: state.phase,
+      objectiveIndex: Math.min(state.objectiveIndex + 1, mission.objectives.length),
+      objectivesCompleted: completedObjectives(mission, state),
+      objectiveTotal: mission.objectives.length,
+      objectiveLabel: objective?.label ?? 'Mission complete',
+      objectiveDetail: objective?.detail ?? '',
+      objectiveInstruction: objectiveInstruction(mission, state),
+      objectiveProgress: objectiveProgress(mission, state),
+      objectivePosition: objective?.position ? { ...objective.position } : null,
+      objectiveRadius: objective?.radius ?? null,
+      extractionRemainingMs: state.extractionRemainingMs,
+      inExtractionZone: state.inExtractionZone,
+      encounterIntro: encounter?.intro ?? null,
+      holdingPosition: objective?.kind === 'extract' ? state.inExtractionZone : state.objectiveProgressMs > 0,
     };
   }
 
@@ -1444,6 +2598,12 @@ export class CombatSimulation {
 
   get facing(): number {
     return this.playerFacing;
+  }
+
+  /** The player's current velocity, for the renderer's locomotion animation.
+   * Read-only: the simulation owns it, and nothing outside may steer with it. */
+  get playerVelocity(): Vec2 {
+    return { ...this.playerVelocityRef };
   }
 
   get directorRef(): TacticalDirector {

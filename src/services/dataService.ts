@@ -162,6 +162,8 @@ export async function submitMatch(submission: MatchSubmission): Promise<MatchSub
       p_outcome: valid.outcome,
       p_boss_defeated: valid.bossDefeated,
       p_adapted: valid.adapted,
+      p_objectives_completed: valid.objectivesCompleted,
+      p_extracted: valid.extracted,
     });
     if (error) throw error;
     if (!data) throw new Error('empty response from submit_match');

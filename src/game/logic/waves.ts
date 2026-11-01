@@ -1,4 +1,4 @@
-import { getArchetype, type EnemyArchetypeId } from './enemies';
+import { getArchetype, SPAWNABLE_ARCHETYPES, type EnemyArchetypeId } from './enemies';
 
 /**
  * Survival wave composition.
@@ -60,7 +60,7 @@ export function planWave(wave: number): WavePlan {
     spawnIntervalMs,
     intermissionMs,
     isBossWave,
-    allowedArchetypes: eligibleArchetypes(n),
+    allowedArchetypes: isBossWave ? bossEscortArchetypes(n) : eligibleArchetypes(n),
     label: isBossWave ? `WAVE ${n} — EXECUTOR PROTOCOL` : `WAVE ${n}`,
   };
 }
@@ -69,10 +69,25 @@ export function isBossWave(wave: number): boolean {
   return BOSS_WAVES.has(wave);
 }
 
+/**
+ * Archetypes that must never appear in a boss escort.
+ *
+ * A boss wave is authored as a duel: one large, telegraphed threat the player
+ * reads and answers. Support archetypes work against that on purpose — a
+ * commander keeps feeding reinforcements into the arena and a medic keeps
+ * standing the escort back up, so the fight stops being a duel and becomes an
+ * attrition check. Excluding them is what preserves the boss's identity.
+ */
+const NON_ESCORT_ARCHETYPES: readonly EnemyArchetypeId[] = ['commander', 'medic'];
+
 /** Archetypes unlocked by a given wave. Derived from each archetype's `minWave`. */
 export function eligibleArchetypes(wave: number): EnemyArchetypeId[] {
-  const ids: EnemyArchetypeId[] = ['rusher', 'flanker', 'sniper', 'tank', 'hunter'];
-  return ids.filter((id) => getArchetype(id).minWave <= wave);
+  return SPAWNABLE_ARCHETYPES.filter((id) => getArchetype(id).minWave <= wave);
+}
+
+/** Archetypes eligible to escort a boss: basic infantry only. */
+export function bossEscortArchetypes(wave: number): EnemyArchetypeId[] {
+  return eligibleArchetypes(wave).filter((id) => !NON_ESCORT_ARCHETYPES.includes(id));
 }
 
 /**

@@ -18,11 +18,14 @@ export interface CombatHudProps {
   snapshot: SimulationSnapshot;
   onPause: () => void;
   onToggleDebug: () => void;
+  /** One-shot ability triggers, for the pointer users who prefer buttons. */
+  onDodge?: () => void;
+  onGrenade?: () => void;
   debugOpen: boolean;
 }
 
-export function CombatHud({ snapshot, onPause, onToggleDebug, debugOpen }: CombatHudProps) {
-  const { player, wave, waveNumber, enemiesRemaining, score, deathmatch } = snapshot;
+export function CombatHud({ snapshot, onPause, onToggleDebug, onDodge, onGrenade, debugOpen }: CombatHudProps) {
+  const { player, wave, waveNumber, enemiesRemaining, score, deathmatch, dodge, grenades, combo } = snapshot;
   const weapon = getWeapon(player.weapon);
   const state = player.weapons[player.weapon];
 
@@ -107,6 +110,71 @@ export function CombatHud({ snapshot, onPause, onToggleDebug, debugOpen }: Comba
               <p className="hud__label" style={{ marginTop: 6, color: 'var(--hostile)' }}>
                 Critical — find cover
               </p>
+            ) : null}
+          </div>
+
+          {/* ── Ability readout: dodge charge and grenade count ─────────── */}
+          <div className="hud__panel hud__abilities" style={{ minWidth: 168 }}>
+            <div className="between">
+              <span className="hud__label">Dodge</span>
+              <span className="hud__value" style={{ fontSize: 'var(--fs-sm)' }}>
+                {dodge.rolling
+                  ? 'rolling'
+                  : dodge.cooldownMs > 0
+                    ? `${(dodge.cooldownMs / 1000).toFixed(1)}s`
+                    : dodge.invulnerable
+                      ? 'invulnerable'
+                      : 'ready'}
+              </span>
+            </div>
+            <div className="between" style={{ marginTop: 4 }}>
+              <span className="hud__label">Grenades</span>
+              <span className="hud__value hud__value--ammo" style={{ fontSize: 'var(--fs-sm)' }}>
+                {grenades.remaining}
+                {grenades.cooldownRemainingMs > 0
+                  ? ` · ${(grenades.cooldownRemainingMs / 1000).toFixed(1)}s`
+                  : ''}
+              </span>
+            </div>
+            {combo.streak >= 2 ? (
+              <p className="hud__combo" aria-live="polite">
+                {combo.streak} streak · x{combo.multiplier.toFixed(1)}
+              </p>
+            ) : null}
+
+            {/* Pointer users get on-screen ability buttons in the same panel;
+                keyboard users have Shift and G and can ignore these. */}
+            {onDodge || onGrenade ? (
+              <div className="hud__cluster" style={{ marginTop: 6 }}>
+                {onDodge ? (
+                  <button
+                    type="button"
+                    className="touch-btn"
+                    onClick={onDodge}
+                    disabled={dodge.rolling || dodge.cooldownMs > 0 || !player.alive}
+                    aria-label="Dodge roll"
+                  >
+                    <span className="touch-btn__glyph" aria-hidden="true">
+                      ↯
+                    </span>
+                    <span>Dodge</span>
+                  </button>
+                ) : null}
+                {onGrenade ? (
+                  <button
+                    type="button"
+                    className="touch-btn"
+                    onClick={onGrenade}
+                    disabled={grenades.remaining <= 0 || grenades.cooldownRemainingMs > 0 || !player.alive}
+                    aria-label={`Throw grenade, ${grenades.remaining} remaining`}
+                  >
+                    <span className="touch-btn__glyph" aria-hidden="true">
+                      ◉
+                    </span>
+                    <span>Grenade</span>
+                  </button>
+                ) : null}
+              </div>
             ) : null}
           </div>
         </div>

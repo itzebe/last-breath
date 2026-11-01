@@ -14,10 +14,16 @@ import {
 } from '@/game/logic/simulation';
 import { ENEMY_ARCHETYPES, type EnemyArchetypeId } from '@/game/logic/enemies';
 import { buildTextures, enemyTextureKeys, PALETTE } from '@/game/render/textures';
+import { CharacterTextures } from '@/game/render/CharacterTextures';
+import { CharacterView } from '@/game/render/CharacterView';
+import { poseFor, type PoseOptions } from '@/game/render/animation';
+import { SKIN_TONES } from '@/game/render/characters';
+import { ARENA_OBSTACLES, obstacleRect, type Obstacle } from '@/game/logic/obstacles';
 import { getWeapon, type WeaponId } from '@/game/logic/weapons';
+import type { UpgradeId } from '@/game/logic/upgrades';
 import type { TacticalDirector } from '@/game/logic/tacticalDirector';
 import { getAudioEngine, weaponSound } from '@/game/audio';
-import type { Vec2 } from '@/game/logic/vec';
+import { angleDelta, angleOf, sub, type Vec2 } from '@/game/logic/vec';
 
 /**
  * The arena renderer.
@@ -44,20 +50,27 @@ export interface ArenaOptions {
   seed?: number;
   /** Maximum waves before the run is won. Omit for endless survival. */
   maxWaves?: number;
-  /** `survival` (default) or `deathmatch`. */
+  /** `survival` (default), `deathmatch` or `operations`. */
   mode?: ArenaMode;
+  /** Operations: which mission to run. Defaults to OPERATION: LAST EXIT. */
+  missionId?: string;
   callbacks: ArenaCallbacks;
 }
 
 /** Persistent display objects, keyed by entity id, reused across frames. */
 interface EnemyView {
   container: Phaser.GameObjects.Container;
+  /** The articulated human figure. The primitive body/accent sprites are kept
+   * as a flat underlay so the silhouette reads even if a part texture fails. */
+  character: CharacterView;
   body: Phaser.GameObjects.Image;
   accent: Phaser.GameObjects.Image;
   healthBar: Phaser.GameObjects.Rectangle;
   healthBarBg: Phaser.GameObjects.Rectangle;
   archetype: EnemyArchetypeId;
   isBoss: boolean;
+  /** Animation clock, advanced per frame so walk cycles are smooth. */
+  animMs: number;
   /** "AI" marker shown only for deathmatch opponents, so they are never
    * mistaken for human players. */
   aiTag?: Phaser.GameObjects.Text;
@@ -71,10 +84,33 @@ export class ArenaScene extends Phaser.Scene {
 
   private playerImage!: Phaser.GameObjects.Image;
   private playerRing!: Phaser.GameObjects.Arc;
+  /** Articulated human figure for the player. The primitive `playerImage` is
+   * retained as a flat underlay/hitbox ring anchor. */
+  private playerCharacter!: CharacterView;
+  private playerAnimMs = 0;
+  /** Milliseconds since the player last fired, for the shooting pose. */
+  private playerFiredMs = 999;
+  /** Milliseconds since the player was last hit, for the flinch. */
+  private playerHitMs = 999;
+  /** Milliseconds since the player died, for the death fall. */
+  private playerDeathMs = 0;
+  /** Last frame's delta, so the renderer can advance animation clocks. */
+  private lastDtMs = 16;
+  /** One-shot ability requests, latched by React/touch and consumed on the next
+   * simulation step. A latch rather than a flag so a tap between frames is never
+   * dropped. */
+  private pendingDodge = false;
+  private pendingGrenade = false;
+  /** Keys sampled for the dodge and grenade actions. */
+
+  /** Builds and caches every articulated figure's part textures once. */
+  private characterTextures!: CharacterTextures;
   private aimReticle!: Phaser.GameObjects.Graphics;
   private bossBar!: Phaser.GameObjects.Graphics;
   /** Draws the boss attack telegraph on the ground, under the entities. */
   private bossTelegraph!: Phaser.GameObjects.Graphics;
+  /** Draws the Operations objective ring on the ground. */
+  private objectiveMarker!: Phaser.GameObjects.Graphics;
   private waveBanner!: Phaser.GameObjects.Container;
 
   private enemyViews = new Map<number, EnemyView>();
@@ -87,7 +123,7 @@ export class ArenaScene extends Phaser.Scene {
   private firing = false;
 
   private keys!: Record<
-    'up' | 'down' | 'left' | 'right' | 'reload' | 'swap' | 'pause' | 'fire',
+    'up' | 'down' | 'left' | 'right' | 'reload' | 'swap' | 'pause' | 'fire' | 'dodge' | 'grenade',
     Phaser.Input.Keyboard.Key
   >;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
@@ -115,6 +151,10 @@ export class ArenaScene extends Phaser.Scene {
       seed: this.options.seed ?? Date.now(),
       ...(this.options.maxWaves === undefined ? {} : { maxWaves: this.options.maxWaves }),
       ...(this.options.mode === undefined ? {} : { mode: this.options.mode }),
+      ...(this.options.missionId === undefined ? {} : { missionId: this.options.missionId }),
+      // Operations runs the roguelite upgrade loop; the other modes keep Part 2's
+      // balance, where upgrades are not offered.
+      upgradesEnabled: this.options.mode === 'operations',
     });
 
     this.buildArena();
@@ -150,6 +190,32 @@ export class ArenaScene extends Phaser.Scene {
       if (this.textures.exists(key)) this.textures.remove(key);
       this.textures.addCanvas(key, canvas);
     }
+
+    // Articulated human figures, one per archetype plus the player. Built here,
+    // once, so a frame only sets positions and rotations.
+    this.characterTextures = new CharacterTextures(this);
+    const archetypes = Object.values(ENEMY_ARCHETYPES);
+    archetypes.forEach((archetype, index) => {
+      this.characterTextures.register({
+        id: archetype.id,
+        build: archetype.build,
+        helmet: archetype.helmet,
+        uniformColor: archetype.uniformColor,
+        bodyColor: archetype.bodyColor,
+        accentColor: archetype.accentColor,
+        // A stable per-archetype skin so a squad does not look cloned.
+        skin: SKIN_TONES[index % SKIN_TONES.length]!,
+      });
+    });
+    this.characterTextures.register({
+      id: 'player',
+      build: 'standard',
+      helmet: 'cap',
+      uniformColor: 0x22303c,
+      bodyColor: 0x2fd8c6,
+      accentColor: 0xff6a1f,
+      skin: SKIN_TONES[1]!,
+    });
   }
 
   private buildArena(): void {
@@ -200,8 +266,54 @@ export class ArenaScene extends Phaser.Scene {
     this.bossBar = this.add.graphics().setDepth(60).setScrollFactor(0);
     // Telegraphs render under the entities so they read as ground markings.
     this.bossTelegraph = this.add.graphics().setDepth(6);
+    this.objectiveMarker = this.add.graphics().setDepth(5);
+
+    this.buildObstacles(ARENA_OBSTACLES);
+
+    // The player's articulated figure, drawn above the primitive underlay.
+    const playerTextures = this.characterTextures.get('player');
+    if (playerTextures) {
+      this.playerCharacter = new CharacterView(this, { textures: playerTextures, scale: 1 });
+      this.playerCharacter.setDepth(11);
+    }
 
     this.waveBanner = this.createWaveBanner();
+  }
+
+  /**
+   * Draws the arena's cover.
+   *
+   * These blocks are real geometry: they block movement, stop projectiles and
+   * break line of sight. Drawing them is not decoration — an invisible wall is a
+   * bug the player experiences as a ghost hitbox, so the art has to match the
+   * collision exactly.
+   */
+  private buildObstacles(obstacles: readonly Obstacle[]): void {
+    const graphics = this.add.graphics().setDepth(-80);
+    for (const obstacle of obstacles) {
+      const rect = obstacleRect(obstacle);
+      const width = rect.right - rect.left;
+      const height = rect.bottom - rect.top;
+
+      // A short drop shadow to the south-east lifts the block off the floor.
+      graphics.fillStyle(PALETTE.void, 0.5);
+      graphics.fillRect(rect.left + 6, rect.top + 8, width, height);
+
+      graphics.fillStyle(obstacle.kind === 'pillar' ? PALETTE.plate : PALETTE.hull, 1);
+      graphics.fillRect(rect.left, rect.top, width, height);
+
+      // A lighter cap reads as a top face in the plan view.
+      graphics.fillStyle(PALETTE.ridge, 1);
+      graphics.fillRect(rect.left + 5, rect.top + 5, width - 10, height - 10);
+
+      graphics.lineStyle(2, PALETTE.edgeStrong, 0.9);
+      graphics.strokeRect(rect.left, rect.top, width, height);
+
+      // Cover value is legible as a hazard stripe: a block that stops more
+      // bullets is a block worth running to.
+      graphics.fillStyle(obstacle.cover >= 0.7 ? PALETTE.telemetry : PALETTE.edge, 0.7);
+      graphics.fillRect(rect.left, rect.top, width, 3);
+    }
   }
 
   private createWaveBanner(): Phaser.GameObjects.Container {
@@ -243,6 +355,10 @@ export class ArenaScene extends Phaser.Scene {
       swap: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Q),
       pause: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC),
       fire: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
+      // Shift rolls, G lobs a grenade: both are one-shot actions read with
+      // JustDown, never held.
+      dodge: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT),
+      grenade: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.G),
     };
 
     // Right-click must not open the browser menu mid-firefight.
@@ -296,6 +412,21 @@ export class ArenaScene extends Phaser.Scene {
     this.sim.setAdaptationEnabled(enabled);
   }
 
+  /** One-shot: begins a dodge roll. Ignored if the roll is on cooldown. */
+  requestDodge(): void {
+    this.pendingDodge = true;
+  }
+
+  /** One-shot: throws a grenade toward the current aim point. */
+  requestGrenade(): void {
+    this.pendingGrenade = true;
+  }
+
+  /** Resolves a three-choice upgrade card. Returns false if none is pending. */
+  chooseUpgrade(id: UpgradeId): boolean {
+    return this.sim.chooseUpgrade(id);
+  }
+
   setPaused(paused: boolean): void {
     this.paused = paused;
     if (paused) getAudioEngine().suspend();
@@ -326,6 +457,7 @@ export class ArenaScene extends Phaser.Scene {
 
     // Clamp delta so a tab that was backgrounded does not fast-forward the arena.
     const dtMs = Math.min(delta, 50);
+    this.lastDtMs = dtMs;
     if (!this.paused) {
       this.hitStopMs = Math.max(0, this.hitStopMs - dtMs);
       // Hit-stop: a brief slow-down on a kill, which gives impacts weight.
@@ -345,10 +477,19 @@ export class ArenaScene extends Phaser.Scene {
 
     const aim = this.aimVector;
 
+    // One-shot abilities are latched: a tap between two frames is remembered and
+    // cleared here, so input is never silently dropped at a low frame rate.
+    const dodge = this.pendingDodge || Phaser.Input.Keyboard.JustDown(this.keys.dodge);
+    const grenade = this.pendingGrenade || Phaser.Input.Keyboard.JustDown(this.keys.grenade);
+    this.pendingDodge = false;
+    this.pendingGrenade = false;
+
     return {
       move,
       aim,
       firing: this.firing || this.keys?.fire?.isDown === true,
+      ...(dodge ? { dodge: true } : {}),
+      ...(grenade ? { grenade: true, grenadeTarget: aim } : {}),
     };
   }
 
@@ -375,6 +516,7 @@ export class ArenaScene extends Phaser.Scene {
     switch (event.type) {
       case 'shot':
         audio.play(weaponSound(event.weapon));
+        this.playerFiredMs = 0;
         this.spawnMuzzleFlash(event.at, event.angle);
         this.cameras.main.shake(70, getWeapon(event.weapon).recoil);
         break;
@@ -389,6 +531,7 @@ export class ArenaScene extends Phaser.Scene {
         break;
       case 'player_hit':
         audio.play('player_hit');
+        this.playerHitMs = 0;
         this.cameras.main.shake(180, 0.008);
         this.cameras.main.flash(90, 120, 20, 30);
         break;
@@ -433,7 +576,60 @@ export class ArenaScene extends Phaser.Scene {
         break;
       case 'player_respawned':
         audio.play('reload_complete');
+        this.playerDeathMs = 0;
+        this.playerHitMs = 999;
         this.cameras.main.flash(160, 40, 90, 140);
+        break;
+      case 'dodge':
+        audio.play('dodge');
+        break;
+      case 'grenade_thrown':
+        audio.play('grenade_throw');
+        break;
+      case 'grenade_exploded':
+        audio.play('explosion');
+        this.spawnExplosion(event.at, event.radius);
+        this.cameras.main.shake(260, 0.014);
+        break;
+      case 'critical_hit':
+        audio.play('critical_hit');
+        this.spawnHitSpark(event.at, PALETTE.ammo);
+        break;
+      case 'combo':
+        if (event.streak >= 3) this.showWaveBanner(`${event.streak} STREAK`, `x${event.multiplier.toFixed(1)} SCORE`);
+        break;
+      case 'reinforcements_called':
+        audio.play('enemy_alert');
+        this.showWaveBanner('REINFORCEMENTS', 'COMMANDER CALLED SUPPORT');
+        break;
+      case 'ally_revived':
+        audio.play('enemy_alert');
+        this.spawnPickupFlash(event.at);
+        break;
+      case 'enemy_searching':
+        audio.play('enemy_alert');
+        break;
+      case 'mission_started':
+        audio.play('mission_start');
+        this.showWaveBanner(event.codename, 'OPERATION START');
+        break;
+      case 'objective_changed':
+        audio.play('objective');
+        this.showWaveBanner(event.label, `${event.index + 1} / ${event.total}`);
+        break;
+      case 'extraction_started':
+        audio.play('extraction');
+        this.showWaveBanner('EXTRACTION', `HOLD FOR ${Math.round(event.durationMs / 1000)}s`);
+        break;
+      case 'extraction_lost':
+        audio.play('enemy_alert');
+        this.showWaveBanner('EXTRACTION LOST', 'RETURN TO THE ZONE');
+        break;
+      case 'upgrade_offer':
+        audio.play('upgrade');
+        break;
+      case 'upgrade_taken':
+        audio.play('upgrade');
         break;
       case 'adaptation_changed':
         audio.play('adaptation');
@@ -503,6 +699,37 @@ export class ArenaScene extends Phaser.Scene {
     });
   }
 
+  /** A grenade detonation: a hot core, an expanding shock ring, and debris. */
+  private spawnExplosion(at: Vec2, radius: number): void {
+    const core = this.add.circle(at.x, at.y, radius * 0.35, PALETTE.signal, 0.5).setDepth(12);
+    this.tweens.add({ targets: core, scale: 1.8, alpha: 0, duration: 320, onComplete: () => core.destroy() });
+
+    const ring = this.add.circle(at.x, at.y, radius * 0.3).setStrokeStyle(3, PALETTE.ammo, 0.9).setDepth(13);
+    this.tweens.add({
+      targets: ring,
+      scale: (radius * 1.05) / (radius * 0.3),
+      alpha: 0,
+      duration: 380,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+
+    for (let i = 0; i < 10; i += 1) {
+      const angle = (Math.PI * 2 * i) / 10 + Math.random() * 0.4;
+      const spark = this.add.image(at.x, at.y, 'spark').setDepth(13).setTint(PALETTE.signal).setScale(1.3);
+      this.tweens.add({
+        targets: spark,
+        x: at.x + Math.cos(angle) * radius * 0.9,
+        y: at.y + Math.sin(angle) * radius * 0.9,
+        alpha: 0,
+        scale: 0.2,
+        duration: 420,
+        ease: 'Cubic.easeOut',
+        onComplete: () => spark.destroy(),
+      });
+    }
+  }
+
   /** The visual "release" when a boss attack leaves its telegraph. */
   private spawnTelegraphBurst(at: Vec2): void {
     const ring = this.add.circle(at.x, at.y, 20).setStrokeStyle(3, PALETTE.hostile, 0.9).setDepth(13);
@@ -543,6 +770,7 @@ export class ArenaScene extends Phaser.Scene {
     this.renderBossTelegraph(snapshot);
     this.renderBossBar(snapshot);
     this.renderReticle(snapshot);
+    this.renderObjectiveMarker(snapshot);
 
     // The HUD is React's job; hand it a snapshot every frame.
     this.options.callbacks.onSnapshot(snapshot);
@@ -550,8 +778,11 @@ export class ArenaScene extends Phaser.Scene {
 
   private renderPlayer(snapshot: SimulationSnapshot): void {
     const position = this.sim.playerPos;
+    // The primitive sprite is now only the underlay/hitbox anchor: it stays put
+    // and stays faint, so the articulated figure is what the player reads.
     this.playerImage.setPosition(position.x, position.y);
     this.playerImage.setRotation(this.sim.facing);
+    this.playerImage.setAlpha(0.18);
     this.playerRing.setPosition(position.x, position.y);
 
     // Health is signalled through the ring's colour and its arc, so the player
@@ -561,9 +792,55 @@ export class ArenaScene extends Phaser.Scene {
     this.playerRing.setStrokeStyle(1.5, color, 0.4 + fraction * 0.4);
     this.playerRing.setAlpha(snapshot.player.alive ? 1 : 0.35);
 
-    // Hit flash.
-    const flashing = snapshot.player.health < 100 && this.hitStopMs > 0;
-    this.playerImage.setTexture(flashing ? 'player-flash' : 'player');
+    // Advance the pose timers. These are wall-clock-free: they are driven by the
+    // frame delta, exactly like the simulation, so the animation corresponds to
+    // the state the simulation is actually in.
+    const dt = this.lastDtMs;
+    this.playerAnimMs += dt;
+    this.playerFiredMs += dt;
+    this.playerHitMs += dt;
+    if (!snapshot.player.alive) this.playerDeathMs += dt;
+
+    const view = this.playerCharacter;
+    if (!view) return;
+    view.advance(dt);
+
+    const weapon = getWeapon(snapshot.player.weapon);
+    const weaponState = snapshot.player.weapons[snapshot.player.weapon];
+    const reloading = weaponState.reloadRemainingMs > 0;
+    const reloadProgress = reloading ? 1 - weaponState.reloadRemainingMs / weapon.reloadMs : 0;
+
+    const speed = Math.hypot(this.sim.playerVelocity.x, this.sim.playerVelocity.y);
+    const dodging = snapshot.dodge.rolling;
+    const dodgeProgress = dodging ? 1 - snapshot.dodge.cooldownMs / Math.max(1, snapshot.dodge.cooldownTotalMs) : 0;
+
+    // Aim is relative to the facing direction: 0 is straight ahead, ±π is behind.
+    const aimOffset = this.aimVector
+      ? angleDelta(this.sim.facing, angleOf(sub(this.aimVector, position)))
+      : 0;
+
+    const poseOptions: PoseOptions = {
+      aimOffset,
+      firing: this.playerFiredMs < 110,
+      reloadProgress,
+      hitFlash: this.playerHitMs < 260 ? 1 - this.playerHitMs / 260 : 0,
+      deathProgress: snapshot.player.alive ? 0 : Math.min(1, this.playerDeathMs / 900),
+      meleeWindup: false,
+      twoHanded: snapshot.player.weapon !== 'pistol',
+    };
+
+    const pose = poseFor(
+      { speed, elapsedMs: this.playerAnimMs, dodging, dodgeProgress },
+      poseOptions,
+    );
+
+    const tint = this.playerHitMs < 160 ? 0xffffff : null;
+    view.apply(position.x, position.y, this.sim.facing, pose, {
+      alpha: snapshot.player.alive ? 1 : 0.7,
+      tint,
+      weaponVisible: true,
+      flashing: this.playerHitMs < 160,
+    });
   }
 
   private renderEnemies(snapshot: SimulationSnapshot): void {
@@ -591,8 +868,19 @@ export class ArenaScene extends Phaser.Scene {
     const archetype = ENEMY_ARCHETYPES[enemy.archetype];
     const keys = enemyTextureKeys(archetype.id, archetype.bodyColor);
 
-    const body = this.add.image(0, 0, keys.body);
-    const accent = this.add.image(0, 0, keys.accent).setScale(0.4).setAlpha(0.85);
+    // A faint primitive underlay keeps the archetype's colour on the ground even
+    // under the articulated figure, and doubles as the "this is a hostile" read
+    // at the edge of the screen.
+    const body = this.add.image(0, 0, keys.body).setAlpha(0.25);
+    const accent = this.add.image(0, 0, keys.accent).setScale(0.4).setAlpha(0.5);
+
+    // The articulated human figure, scaled to the archetype's build so a heavy
+    // genuinely reads larger than a rusher.
+    const characterTextures = this.characterTextures.get(archetype.id);
+    const character = new CharacterView(this, {
+      textures: characterTextures ?? this.characterTextures.get('player')!,
+      scale: enemy.isBoss ? 1.6 : archetype.build === 'heavy' ? 1.15 : 1,
+    });
 
     const barWidth = enemy.isBoss ? 0 : Math.max(20, enemy.radius * 2);
     const healthBarBg = this.add.rectangle(0, -enemy.radius - 10, barWidth, 3, PALETTE.void, 0.85);
@@ -619,18 +907,72 @@ export class ArenaScene extends Phaser.Scene {
 
     const container = this.add.container(enemy.position.x, enemy.position.y, children);
     container.setDepth(enemy.isBoss ? 8 : 7);
+    // The figure rides inside the entity container, so it inherits the entity's
+    // world position for free and only has to be posed locally each frame.
+    container.add(character.container);
+    character.container.setPosition(0, 0);
 
-    return { container, body, accent, healthBar, healthBarBg, archetype: enemy.archetype, isBoss: enemy.isBoss, aiTag };
+    return {
+      container,
+      character,
+      body,
+      accent,
+      healthBar,
+      healthBarBg,
+      archetype: enemy.archetype,
+      isBoss: enemy.isBoss,
+      animMs: Math.random() * 1000,
+      aiTag,
+    };
   }
 
   private updateEnemyView(view: EnemyView, enemy: Enemy): void {
     view.container.setPosition(enemy.position.x, enemy.position.y);
     view.body.setRotation(enemy.facing);
 
+    const dt = this.lastDtMs;
+    view.animMs += dt;
+    view.character.advance(dt);
+
+    // Speed comes from the real velocity the simulation integrated, so a hostile
+    // walking and a hostile sprinting animate differently for a reason.
+    const speed = Math.hypot(enemy.velocity.x, enemy.velocity.y);
+    const archetype = ENEMY_ARCHETYPES[enemy.archetype];
+    const reloading = enemy.reloadRemainingMs > 0;
+    const firing = enemy.attackCooldownMs > archetype.attackCooldownMs * 0.72;
+
+    const pose = poseFor(
+      {
+        speed,
+        elapsedMs: view.animMs,
+        dodging: false,
+        dodgeProgress: 0,
+      },
+      {
+        aimOffset: 0,
+        firing,
+        reloadProgress: reloading ? 1 - enemy.reloadRemainingMs / 1500 : 0,
+        hitFlash: enemy.hitFlashMs > 0 ? Math.min(1, enemy.hitFlashMs / 120) : 0,
+        deathProgress: enemy.dying ? Math.min(1, enemy.deathMs / 900) : 0,
+        meleeWindup: enemy.role === 'assault' && enemy.attackCooldownMs < archetype.attackCooldownMs * 0.35,
+        twoHanded: archetype.rangedDamage > 0,
+      },
+    );
+
+    // Posed in the container's local frame: the parent already carries the world
+    // position, so passing world coordinates here would double the offset.
+    view.character.apply(0, 0, enemy.facing, pose, {
+      alpha: enemy.dying ? Math.max(0, 1 - enemy.deathMs / 900) : 1,
+      tint: enemy.hitFlashMs > 0 ? 0xffffff : null,
+      weaponVisible: true,
+      flashing: enemy.hitFlashMs > 0,
+    });
+
     if (enemy.dying) {
-      // Death animation: expand, fade, then the caller retires the view.
+      // Death animation: the figure falls, then the whole view fades and the
+      // caller retires it.
       const progress = Math.min(1, enemy.deathMs / 900);
-      view.container.setScale(1 + progress * 0.5);
+      view.container.setScale(1 + progress * 0.3);
       view.container.setAlpha(1 - progress);
       view.healthBar.setVisible(false);
       view.healthBarBg.setVisible(false);
@@ -647,8 +989,7 @@ export class ArenaScene extends Phaser.Scene {
     view.healthBar.fillColor = fraction > 0.5 ? PALETTE.hostile : PALETTE.signal;
 
     // Hit flash: whiten the body briefly.
-    view.body.setTint(enemy.hitFlashMs > 0 ? 0xffffff : 0xffffff);
-    view.body.setAlpha(enemy.hitFlashMs > 0 ? 1 : 0.98);
+    view.body.setAlpha(enemy.hitFlashMs > 0 ? 0.4 : 0.25);
     if (enemy.hitFlashMs > 0) view.body.setTintFill(0xffffff);
     else view.body.clearTint();
 
@@ -663,6 +1004,44 @@ export class ArenaScene extends Phaser.Scene {
       view.container.setScale(1);
       view.container.setAlpha(1);
     }
+  }
+
+  /**
+   * Draws the world-space marker for the current Operations objective.
+   *
+   * An objective the player cannot locate is not an objective, it is a scavenger
+   * hunt, so the marker is a ground ring whose fill tracks the objective's
+   * progress and a pip that pulses while the player is holding the zone.
+   */
+  private renderObjectiveMarker(snapshot: SimulationSnapshot): void {
+    const mission = snapshot.mission;
+    const marker = this.objectiveMarker;
+    if (!mission || !mission.objectivePosition || mission.phase === 'complete' || mission.phase === 'failed') {
+      marker.clear();
+      marker.setVisible(false);
+      return;
+    }
+    marker.setVisible(true);
+
+    const { x, y } = mission.objectivePosition;
+    const radius = mission.objectiveRadius ?? 70;
+    const extracting = mission.phase === 'extraction';
+    const colour = extracting ? PALETTE.ammo : PALETTE.telemetry;
+
+    marker.clear();
+    marker.lineStyle(3, colour, 0.85);
+    marker.strokeCircle(x, y, radius);
+
+    const progress = Math.max(0, Math.min(1, mission.objectiveProgress));
+    if (progress > 0) {
+      marker.fillStyle(colour, 0.18 + (mission.holdingPosition ? 0.22 : 0));
+      marker.slice(x, y, radius, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2, false);
+      marker.fillPath();
+    }
+
+    const pulse = 0.5 + 0.5 * Math.sin(this.time.now / 220);
+    marker.fillStyle(colour, 0.35 + pulse * 0.4);
+    marker.fillCircle(x, y, 6 + pulse * 3);
   }
 
   private renderProjectiles(snapshot: SimulationSnapshot): void {
@@ -851,6 +1230,7 @@ export class ArenaScene extends Phaser.Scene {
     this.scale.off('resize', this.handleResize, this);
     for (const view of this.enemyViews.values()) view.container.destroy(true);
     this.enemyViews.clear();
+    this.playerCharacter?.destroy();
     for (const image of this.projectileImages.values()) image.destroy();
     this.projectileImages.clear();
     for (const image of this.pickupImages.values()) image.destroy();

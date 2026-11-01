@@ -18,6 +18,13 @@ export interface WeaponState {
   reloadRemainingMs: number;
   /** Milliseconds until the next shot is permitted, or 0. */
   cooldownRemainingMs: number;
+  /**
+   * Rounds this magazine holds. Normally the weapon spec's magazine size, but
+   * raised by the `twin_mag` run upgrade. Kept on the state rather than read
+   * from the spec so an upgrade can enlarge a magazine without mutating the
+   * shared, frozen weapon catalogue.
+   */
+  capacity: number;
 }
 
 export interface PlayerState {
@@ -45,6 +52,7 @@ export function createWeaponState(id: WeaponId, reserveAmmo = Number.POSITIVE_IN
     reserveAmmo,
     reloadRemainingMs: 0,
     cooldownRemainingMs: 0,
+    capacity: spec.magazine,
   };
 }
 
@@ -77,8 +85,22 @@ export function isReloading(player: PlayerState): boolean {
 
 export function magazineFraction(player: PlayerState): number {
   const state = currentWeaponState(player);
-  const spec = getWeapon(state.id);
-  return spec.magazine > 0 ? state.ammoInMagazine / spec.magazine : 0;
+  return state.capacity > 0 ? state.ammoInMagazine / state.capacity : 0;
+}
+
+/**
+ * Raises a weapon's magazine capacity to `capacity` rounds and immediately
+ * fills the difference, so an upgrade that enlarges a magazine is felt on the
+ * next shot rather than only after the next reload.
+ */
+export function setMagazineCapacity(player: PlayerState, id: WeaponId, capacity: number): void {
+  const state = player.weapons[id];
+  if (!state) return;
+  const spec = getWeapon(id);
+  const next = Math.max(spec.magazine, Math.round(capacity));
+  const delta = Math.max(0, next - state.capacity);
+  state.capacity = Math.max(state.capacity, next);
+  state.ammoInMagazine = Math.min(state.capacity, state.ammoInMagazine + delta);
 }
 
 /** True when the weapon can fire right now. */
@@ -125,7 +147,7 @@ export function beginReload(player: PlayerState): ReloadOutcome {
   const spec = getWeapon(state.id);
 
   if (state.reloadRemainingMs > 0) return { started: false, reason: 'already' };
-  if (state.ammoInMagazine >= spec.magazine) return { started: false, reason: 'full' };
+  if (state.ammoInMagazine >= state.capacity) return { started: false, reason: 'full' };
   if (state.reserveAmmo <= 0) return { started: false, reason: 'no_reserve' };
 
   state.reloadRemainingMs = spec.reloadMs;
@@ -138,8 +160,7 @@ export function cancelReload(player: PlayerState): void {
 }
 
 function completeReload(state: WeaponState): void {
-  const spec = getWeapon(state.id);
-  const needed = spec.magazine - state.ammoInMagazine;
+  const needed = state.capacity - state.ammoInMagazine;
   const available = Number.isFinite(state.reserveAmmo) ? state.reserveAmmo : needed;
   const loaded = Math.min(needed, available);
   state.ammoInMagazine += loaded;
@@ -221,6 +242,5 @@ export function grantAmmo(player: PlayerState, fraction = AMMO_PICKUP_FRACTION):
 /** Convenience predicate used by the HUD to decide whether to nudge the player. */
 export function isLowAmmo(player: PlayerState): boolean {
   const state = currentWeaponState(player);
-  const spec = getWeapon(state.id);
-  return state.ammoInMagazine / spec.magazine <= 0.25;
+  return state.capacity > 0 ? state.ammoInMagazine / state.capacity <= 0.25 : true;
 }

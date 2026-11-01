@@ -126,9 +126,9 @@ A tampered client can therefore lie about its match, but it cannot choose its ow
 
 ## Controls
 
-**Desktop** — WASD or arrow keys to move, mouse to aim, left click to fire, R to reload, Q to cycle weapons, Esc to pause.
+**Desktop** — WASD or arrow keys to move, mouse to aim, left click to fire, **Shift** to dodge roll, **G** to throw a grenade, R to reload, Q to cycle weapons, Esc to pause.
 
-**Mobile (Android)** — left thumbstick to move, right thumbstick to aim and fire, on-screen reload / weapon / pause buttons. Gameplay is landscape; a prompt appears if you hold the device upright.
+**Mobile (Android)** — left thumbstick to move, right thumbstick to aim and fire, on-screen reload / weapon / dodge / grenade / pause buttons. Gameplay is landscape; a prompt appears if you hold the device upright.
 
 ---
 
@@ -137,6 +137,10 @@ A tampered client can therefore lie about its match, but it cannot choose its ow
 **Survival** — the primary mode. Progressive waves, increasing pressure, health and ammunition pickups, and a boss every tenth wave. This is what the arena scores.
 
 **Deathmatch** — a single-player match against AI-controlled opponents, with a timer, an elimination target and a results screen. Opponents are clearly labelled as AI; this is not online multiplayer and does not claim to be.
+
+**Operations** — a scripted mission mode. **LAST EXIT** chains six objectives (clear, reach, hold, clear, reach, extract) across five escalating encounters; between encounters the arena freezes to offer a roguelite upgrade choice. Reaching the extraction pad and holding it completes the mission. An Operations run is recorded as `extracted` and scored on ground taken, not time served.
+
+Seven enemy doctrines populate the arena: **rusher**, **flanker**, **sniper**, **tank**, **hunter**, **commander** (elects itself squad leader and calls reinforcements) and **medic** (revives downed allies) — plus **THE EXECUTOR** boss.
 
 ---
 
@@ -163,5 +167,7 @@ Four weapons with genuinely different behaviour: a balanced **pistol**, an autom
 Part 1 established the foundation: landing page, real Supabase authentication, player dashboard, and a fully functional combat arena with adaptive enemies.
 
 Part 2 completes the experience: a deep adaptive-AI behaviour model with five enemy archetypes, the **THE EXECUTOR** boss with three phases and telegraphed attacks, survival as a scored progression mode, a single-player **deathmatch** against clearly-labelled AI opponents, XP/levels/unlocks/achievements, a global leaderboard, procedural audio, and a visual-polish pass.
+
+Part 3 turns the arena into a cinematic tactical survival game: articulated character rendering and animation, a tactical AI layer (squad election, cover, suppression, flanking, commander reinforcements, medic revives — seven doctrines in all), player **dodge roll** and **grenades**, a roguelite **upgrade** draft between fights, and the scripted **Operations** mission mode with server-authoritative scoring.
 
 The build is Vercel-ready (`npm run build` → static `dist/`). Deployment requires the Supabase project URL and anon key as Vercel environment variables, plus running the migrations against the project database.

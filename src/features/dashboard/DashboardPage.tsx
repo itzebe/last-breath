@@ -444,6 +444,32 @@ export function DashboardPage() {
               </p>
             </div>
 
+            <div className="play-block">
+              <div>
+                <p className="eyebrow eyebrow--xp">Operations</p>
+                <h2 className="section-title" style={{ marginTop: 'var(--sp-2)' }}>
+                  Mission: Last Exit
+                </h2>
+              </div>
+              <p className="text-2" style={{ fontSize: 'var(--fs-sm)' }}>
+                A scripted operation with real objectives: hold the plaza, secure the relay, then
+                reach extraction while the garrison closes in. Take a field upgrade between
+                encounters and finish the mission before the countdown does.
+              </p>
+              <Button
+                variant="ghost"
+                size="lg"
+                block
+                onClick={() => navigate('/arena?mode=operations')}
+              >
+                ▶ Deploy on operation
+              </Button>
+              <p className="play-block__hint">
+                Objective progress and extraction are recorded server-side; score and XP are computed
+                by the database from the mission facts.
+              </p>
+            </div>
+
             <LoadoutPanel unlocked={data.unlocked} level={statistics.level} />
             <AchievementsPanel achievements={data.achievements} earnedIds={earnedIds} />
 

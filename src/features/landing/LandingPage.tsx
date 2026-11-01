@@ -84,7 +84,7 @@ function Hero() {
 
           <div className="hero__proof">
             <span>Four distinct weapons</span>
-            <span>Five enemy doctrines</span>
+            <span>Seven enemy doctrines</span>
             <span>Three-phase boss</span>
             <span>Touch controls</span>
           </div>
@@ -114,8 +114,8 @@ const FEATURES: Feature[] = [
   },
   {
     index: '02',
-    title: 'Five doctrines',
-    body: 'Rushers close and trade. Flankers refuse the front line. Marksmen hold sightlines. Bulwarks absorb punishment. Tactical Hunters cut off escape routes and strike when you reload. Each reacts to the same order differently.',
+    title: 'Seven doctrines',
+    body: 'Rushers close and trade. Flankers refuse the front line. Marksmen hold sightlines. Bulwarks absorb punishment. Tactical Hunters cut off escape routes and strike when you reload. Overseers coordinate the squad and call reinforcements, and Field Medics revive downed allies. Each reacts to the same order differently.',
     tone: 'hostile',
   },
   {
@@ -334,7 +334,7 @@ function EnemySection() {
       <div className="shell">
         <div className="section__head">
           <p className="eyebrow eyebrow--hostile">Opposition</p>
-          <h2>Five doctrines, one overseer</h2>
+          <h2>Seven doctrines, one overseer</h2>
           <p className="lead">
             Every hostile belongs to a doctrine with its own speed, durability, engagement range and
             weapon. The tactical director issues one order to all of them; each carries it out in its

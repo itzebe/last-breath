@@ -107,7 +107,7 @@ export function createUuid(): string {
 
 export const matchSubmissionSchema = z.object({
   clientMatchId: uuidSchema,
-  mode: z.enum(['survival', 'deathmatch']),
+  mode: z.enum(['survival', 'deathmatch', 'operations']),
   waveReached: z.number().int().min(0).max(1000),
   eliminations: z.number().int().min(0).max(100000),
   deaths: z.number().int().min(0).max(1000),
@@ -115,9 +115,14 @@ export const matchSubmissionSchema = z.object({
   shotsFired: z.number().int().min(0).max(10_000_000),
   shotsHit: z.number().int().min(0).max(10_000_000),
   survivalSeconds: z.number().int().min(0).max(86_400),
-  outcome: z.enum(['victory', 'defeat', 'abandoned']),
+  // `extracted` is the Operations outcome. It is accepted here so the mode can
+  // report its real result rather than being flattened into `victory`.
+  outcome: z.enum(['victory', 'defeat', 'extracted', 'abandoned']),
   bossDefeated: z.boolean(),
   adapted: z.boolean(),
+  /** Operations: objectives completed, and whether the player extracted. */
+  objectivesCompleted: z.number().int().min(0).max(64).default(0),
+  extracted: z.boolean().default(false),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

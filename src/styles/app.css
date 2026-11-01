@@ -738,6 +738,119 @@
 }
 .pause-overlay__card { width: 100%; max-width: 440px; }
 
+/* ── OPERATIONS MISSION PANEL ───────────────────────────────────────────── */
+.mission-panel {
+  position: absolute;
+  top: calc(var(--sp-5) + 68px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 240px;
+  max-width: min(360px, 80vw);
+  pointer-events: none;
+}
+.mission-panel[data-phase='complete'] { border-color: var(--vital); }
+.mission-panel[data-phase='failed'] { border-color: var(--hostile); }
+.mission-panel[data-phase='extraction'] { border-color: var(--ammo); }
+.mission-panel__track {
+  margin-top: 6px;
+  height: 3px;
+  background: var(--ridge);
+  overflow: hidden;
+}
+.mission-panel__fill {
+  display: block;
+  height: 100%;
+  background: var(--telemetry);
+  transition: width 120ms linear;
+}
+.mission-panel[data-phase='extraction'] .mission-panel__fill { background: var(--ammo); }
+.mission-panel__clock {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--ammo);
+  letter-spacing: var(--tracking-etched);
+}
+
+/* ── HUD ABILITY READOUT ────────────────────────────────────────────────── */
+.hud__abilities { pointer-events: auto; }
+.hud__combo {
+  margin-top: 6px;
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  color: var(--signal);
+  letter-spacing: var(--tracking-etched);
+  text-transform: uppercase;
+}
+
+/* ── UPGRADE CHOOSER ────────────────────────────────────────────────────── */
+.upgrade-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+  background: rgba(4, 6, 10, 0.9);
+  backdrop-filter: blur(4px);
+}
+.upgrade-overlay__inner { width: 100%; max-width: 760px; }
+.upgrade-overlay__head { text-align: center; margin-bottom: var(--sp-5); }
+.upgrade-grid {
+  display: grid;
+  gap: var(--sp-3);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+}
+.upgrade-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  text-align: left;
+  background: var(--plate);
+  border: 1px solid var(--edge-strong);
+  color: var(--ink);
+  clip-path: var(--chamfer-sm);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+.upgrade-card:hover,
+.upgrade-card:focus-visible {
+  border-color: var(--signal);
+  background: var(--signal-wash);
+  transform: translateY(-2px);
+}
+.upgrade-card[data-rarity='uncommon'] { border-color: var(--telemetry); }
+.upgrade-card[data-rarity='rare'] { border-color: var(--xp); }
+.upgrade-card__category {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: var(--tracking-etched);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.upgrade-card__name {
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-tight);
+}
+.upgrade-card__desc { font-size: var(--fs-sm); color: var(--ink-2); line-height: 1.45; }
+.upgrade-card__meta {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: var(--tracking-etched);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.upgrade-card__rarity { color: var(--ink-2); }
+.upgrade-card__stack { color: var(--vital); }
+.upgrade-card__max { margin-left: auto; }
+
 /* ── RESPONSIVE ─────────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .nav__inner { min-height: 56px; }

@@ -3,6 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Panel } from '@/components/ui';
 import { PhaserArena } from './PhaserArena';
 import { CombatHud } from './CombatHud';
+import { MissionPanel } from './MissionPanel';
+import { UpgradeChooser } from './UpgradeChooser';
 import { RunResults } from './RunResults';
 import { AiDebugOverlay } from './AiDebugOverlay';
 import { ThumbStick, TouchActionButton } from './TouchControls';
@@ -15,10 +17,11 @@ import { isWeaponId, WEAPON_IDS, type WeaponId } from '@/game/logic/weapons';
 import { getAudioEngine, loadAudioSettings } from '@/game/audio';
 import type { ArenaScene } from '@/game/scenes/ArenaScene';
 import type { ArenaMode, SimulationSnapshot } from '@/game/logic/simulation';
+import type { UpgradeId } from '@/game/logic/upgrades';
 import { toAppError } from '@/lib/errors';
 import { formatClock } from '@/lib/format';
 import { createUuid } from '@/lib/validation';
-import type { MatchOutcome } from '@/services/types';
+import { toMatchSubmission } from './submission';
 
 type RunState = 'loading' | 'active' | 'paused' | 'ended';
 
@@ -41,13 +44,17 @@ const FALLBACK_LOADOUT: WeaponId[] = ['pistol'];
 const MAX_WAVES = 30;
 
 function parseMode(value: string | null): ArenaMode {
-  return value === 'deathmatch' ? 'deathmatch' : 'survival';
+  if (value === 'deathmatch') return 'deathmatch';
+  if (value === 'operations') return 'operations';
+  return 'survival';
 }
 
 export function ArenaPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const mode = parseMode(searchParams.get('mode'));
+  // Operations: which mission. Undefined falls back to the scene default.
+  const missionId = mode === 'operations' ? (searchParams.get('mission') ?? undefined) : undefined;
   const { user } = useAuth();
   const isTouch = useIsTouchDevice();
   const isPortrait = useIsPortrait();
@@ -163,37 +170,13 @@ export function ArenaPage() {
         return;
       }
 
-      const outcome: MatchOutcome = final.outcome === 'victory' ? 'victory' : 'defeat';
-      const isDeathmatch = final.mode === 'deathmatch';
       // The client's own score is never sent. The database derives score and XP
       // from these facts, so a tampered payload can only misreport facts, not
-      // fabricate a rank.
-      //
-      // `clientMatchId` is the idempotency key and the column is `uuid`, so it
-      // must be a real UUID — a composed string fails the Postgres cast.
+      // fabricate a rank. `createUuid` supplies the idempotency key.
       const clientMatchId = createUuid();
 
       try {
-        const result = await submitMatch({
-          clientMatchId,
-          mode: final.mode,
-          // Deathmatch has no waves: reporting the difficulty-derived waveNumber
-          // would corrupt `highest_wave`, so it is reported as 0.
-          waveReached: isDeathmatch ? 0 : final.waveNumber,
-          eliminations: final.eliminations,
-          deaths: isDeathmatch
-            ? (final.deathmatch?.playerDeaths ?? 0)
-            : final.outcome === 'victory'
-              ? 0
-              : 1,
-          damageDealt: Math.round(final.damageDealt),
-          shotsFired: final.shotsFired,
-          shotsHit: final.shotsHit,
-          survivalSeconds: Math.floor(final.elapsedMs / 1000),
-          outcome,
-          bossDefeated: final.bossDefeated,
-          adapted: final.adapted,
-        });
+        const result = await submitMatch(toMatchSubmission(final, clientMatchId));
 
         if (result.duplicate) {
           setSubmission({ status: 'duplicate' });
@@ -252,6 +235,18 @@ export function ArenaPage() {
 
   const handleReload = useCallback(() => {
     sceneRef.current?.requestReload();
+  }, []);
+
+  const handleDodge = useCallback(() => {
+    sceneRef.current?.requestDodge();
+  }, []);
+
+  const handleGrenade = useCallback(() => {
+    sceneRef.current?.requestGrenade();
+  }, []);
+
+  const handleChooseUpgrade = useCallback((id: UpgradeId) => {
+    sceneRef.current?.chooseUpgrade(id);
   }, []);
 
   const handleSwitch = useCallback(() => {
@@ -334,6 +329,7 @@ export function ArenaPage() {
         adaptationEnabled={adaptationEnabled}
         maxWaves={MAX_WAVES}
         mode={mode}
+        missionId={missionId}
         paused={runState === 'paused'}
         onSnapshot={handleSnapshot}
         onRunEnded={handleRunEnded}
@@ -341,11 +337,25 @@ export function ArenaPage() {
       />
 
       {snapshot && runState !== 'ended' ? (
-        <CombatHud
-          snapshot={snapshot}
-          debugOpen={debugOpen}
-          onPause={() => setRunState((current) => (current === 'paused' ? 'active' : 'paused'))}
-          onToggleDebug={() => setDebugOpen((open) => !open)}
+        <>
+          <CombatHud
+            snapshot={snapshot}
+            debugOpen={debugOpen}
+            onPause={() => setRunState((current) => (current === 'paused' ? 'active' : 'paused'))}
+            onToggleDebug={() => setDebugOpen((open) => !open)}
+            onDodge={handleDodge}
+            onGrenade={handleGrenade}
+          />
+          {snapshot.mission ? <MissionPanel mission={snapshot.mission} /> : null}
+        </>
+      ) : null}
+
+      {/* ── Roguelite upgrade choice: pauses the arena until a card is taken ── */}
+      {snapshot?.awaitingUpgrade && snapshot.upgradeOffer.length > 0 && runState !== 'ended' ? (
+        <UpgradeChooser
+          options={snapshot.upgradeOffer}
+          taken={snapshot.upgrades}
+          onChoose={handleChooseUpgrade}
         />
       ) : null}
 
@@ -361,6 +371,18 @@ export function ArenaPage() {
             disabled={runState !== 'active'}
           />
           <div className="touch-actions">
+            <TouchActionButton
+              label="Dodge"
+              glyph="↯"
+              onPress={handleDodge}
+              disabled={runState !== 'active'}
+            />
+            <TouchActionButton
+              label="Grenade"
+              glyph="◉"
+              onPress={handleGrenade}
+              disabled={runState !== 'active'}
+            />
             <TouchActionButton label="Reload" glyph="⟳" onPress={handleReload} disabled={runState !== 'active'} />
             <TouchActionButton
               label="Weapon"
@@ -382,7 +404,8 @@ export function ArenaPage() {
             <span className="kbd">W</span> <span className="kbd">A</span> <span className="kbd">S</span>{' '}
             <span className="kbd">D</span> move · mouse aim · <span className="kbd">click</span> or{' '}
             <span className="kbd">space</span> fire · <span className="kbd">R</span> reload ·{' '}
-            <span className="kbd">Q</span> weapon · <span className="kbd">esc</span> pause
+            <span className="kbd">Q</span> weapon · <span className="kbd">shift</span> dodge ·{' '}
+            <span className="kbd">G</span> grenade · <span className="kbd">esc</span> pause
           </p>
         </div>
       ) : null}
@@ -461,7 +484,9 @@ export function ArenaPage() {
         {snapshot
           ? snapshot.deathmatch
             ? `Deathmatch, ${formatClock(snapshot.deathmatch.remainingMs)} remaining, ${snapshot.deathmatch.playerEliminations} of ${snapshot.deathmatch.eliminationTarget} eliminations, health ${Math.round(snapshot.player.health)} of ${snapshot.player.maxHealth}.`
-            : `Wave ${snapshot.waveNumber}, ${snapshot.enemiesRemaining} hostiles remaining, health ${Math.round(snapshot.player.health)} of ${snapshot.player.maxHealth}, score ${snapshot.score}.`
+            : snapshot.mission
+              ? `Operations ${snapshot.mission.codename}, objective ${snapshot.mission.objectiveIndex} of ${snapshot.mission.objectiveTotal}, ${snapshot.mission.objectiveLabel}, health ${Math.round(snapshot.player.health)} of ${snapshot.player.maxHealth}.`
+              : `Wave ${snapshot.waveNumber}, ${snapshot.enemiesRemaining} hostiles remaining, health ${Math.round(snapshot.player.health)} of ${snapshot.player.maxHealth}, score ${snapshot.score}.`
           : 'Preparing arena.'}
       </p>
     </div>
