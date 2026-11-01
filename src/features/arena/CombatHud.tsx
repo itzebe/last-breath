@@ -25,7 +25,8 @@ export interface CombatHudProps {
 }
 
 export function CombatHud({ snapshot, onPause, onToggleDebug, onDodge, onGrenade, debugOpen }: CombatHudProps) {
-  const { player, wave, waveNumber, enemiesRemaining, score, deathmatch, dodge, grenades, combo } = snapshot;
+  const { player, wave, waveNumber, enemiesRemaining, enemiesAlive, score, deathmatch, mission, dodge, grenades, combo } =
+    snapshot;
   const weapon = getWeapon(player.weapon);
   const state = player.weapons[player.weapon];
 
@@ -56,6 +57,23 @@ export function CombatHud({ snapshot, onPause, onToggleDebug, onDodge, onGrenade
               {deathmatch.playerRespawnMs > 0
                 ? ` · re-entering in ${Math.ceil(deathmatch.playerRespawnMs / 1000)}s`
                 : ''}
+            </p>
+          </div>
+        ) : mission ? (
+          // Operations has no waves, so the survival panel would read
+          // "Wave 1 · 0 remaining" for the whole mission. This panel reports the
+          // objective instead, which is what the mode is actually about.
+          <div className="hud__panel" style={{ minWidth: 168 }}>
+            <p className="hud__label">{mission.codename}</p>
+            <p className="hud__value hud__value--signal" style={{ fontSize: 'var(--fs-md)' }}>
+              {mission.phase === 'complete'
+                ? 'Exfil'
+                : mission.phase === 'failed'
+                  ? 'Failed'
+                  : `Objective ${mission.objectiveIndex}/${mission.objectiveTotal}`}
+            </p>
+            <p className="hud__label" style={{ marginTop: 2 }}>
+              {enemiesAlive} hostiles in the field
             </p>
           </div>
         ) : (
