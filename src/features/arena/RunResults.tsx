@@ -47,17 +47,22 @@ function achievementLabel(id: string): string {
 
 export function RunResults({ snapshot, submission, onPlayAgain }: RunResultsProps) {
   const navigate = useNavigate();
+  const isDeathmatch = snapshot.mode === 'deathmatch';
+  const isOperations = snapshot.mode === 'operations';
+  const extracted = isOperations && snapshot.mission?.phase === 'complete';
   const victory = snapshot.outcome === 'victory';
   const deathmatch = snapshot.deathmatch;
-  const isDeathmatch = snapshot.mode === 'deathmatch';
 
   const facts: MatchFacts = {
     mode: snapshot.mode,
-    wave: isDeathmatch ? 0 : snapshot.waveNumber,
+    // Neither Deathmatch nor Operations runs survival waves.
+    wave: isDeathmatch || isOperations ? 0 : snapshot.waveNumber,
     eliminations: snapshot.eliminations,
     survivalSeconds: Math.floor(snapshot.elapsedMs / 1000),
     damageDealt: Math.round(snapshot.damageDealt),
-    outcome: victory ? 'victory' : 'defeat',
+    outcome: extracted ? 'extracted' : victory ? 'victory' : 'defeat',
+    objectivesCompleted: isOperations ? (snapshot.mission?.objectiveIndex ?? 0) : 0,
+    extracted,
   };
 
   const provisionalScore = matchScore(facts);
@@ -72,19 +77,45 @@ export function RunResults({ snapshot, submission, onPlayAgain }: RunResultsProp
       <div className="results__card">
         <Panel tone={victory ? 'telemetry' : 'hostile'}>
           <p className="eyebrow eyebrow--signal">
-            {victory ? (isDeathmatch ? 'Target reached' : 'Arena cleared') : 'Operator down'}
+            {isOperations
+              ? extracted
+                ? 'Exfil successful'
+                : 'Mission failed'
+              : victory
+                ? isDeathmatch
+                  ? 'Target reached'
+                  : 'Arena cleared'
+                : 'Operator down'}
           </p>
           <h2 className={`results__verdict results__verdict--${victory ? 'victory' : 'defeat'}`}>
-            {victory ? (isDeathmatch ? 'Match won' : 'Extracted') : 'Killed in action'}
+            {isOperations
+              ? extracted
+                ? 'Operation complete'
+                : 'Killed in action'
+              : victory
+                ? isDeathmatch
+                  ? 'Match won'
+                  : 'Extracted'
+                : 'Killed in action'}
           </h2>
           <p className="text-2" style={{ marginTop: 'var(--sp-3)', fontSize: 'var(--fs-sm)' }}>
-            {isDeathmatch
-              ? victory
-                ? `You reached the elimination target with ${deathmatch?.playerEliminations ?? 0} kills.`
-                : `The clock beat you. ${deathmatch?.playerEliminations ?? 0} of ${deathmatch?.eliminationTarget ?? 0} eliminations recorded.`
-              : victory
-                ? `You survived all ${snapshot.waveNumber} waves and put down the Executor.`
-                : `The arena held. You reached wave ${snapshot.waveNumber}.`}
+            {isOperations
+              ? extracted
+                ? `${snapshot.mission?.codename ?? 'Operation'} complete. All ${
+                    snapshot.mission?.objectiveTotal ?? 0
+                  } objectives secured and exfil reached.`
+                : `${snapshot.mission?.codename ?? 'Operation'} failed at objective ${
+                    snapshot.mission?.objectiveIndex ?? 0
+                  } of ${snapshot.mission?.objectiveTotal ?? 0}: ${
+                    snapshot.mission?.objectiveLabel ?? 'the objective was not secured'
+                  }.`
+              : isDeathmatch
+                ? victory
+                  ? `You reached the elimination target with ${deathmatch?.playerEliminations ?? 0} kills.`
+                  : `The clock beat you. ${deathmatch?.playerEliminations ?? 0} of ${deathmatch?.eliminationTarget ?? 0} eliminations recorded.`
+                : victory
+                  ? `You survived all ${snapshot.waveNumber} waves and put down the Executor.`
+                  : `The arena held. You reached wave ${snapshot.waveNumber}.`}
           </p>
 
           <div className="results__grid" style={{ marginTop: 'var(--sp-6)' }}>
@@ -97,6 +128,12 @@ export function RunResults({ snapshot, submission, onPlayAgain }: RunResultsProp
                 />
                 <Stat label="Deaths" value={deathmatch?.playerDeaths ?? 0} tone="signal" />
               </>
+            ) : isOperations ? (
+              <Stat
+                label="Objectives"
+                value={`${snapshot.mission?.objectiveIndex ?? 0}/${snapshot.mission?.objectiveTotal ?? 0}`}
+                tone="signal"
+              />
             ) : (
               <Stat label="Wave reached" value={snapshot.waveNumber} tone="signal" />
             )}
@@ -177,7 +214,8 @@ export function RunResults({ snapshot, submission, onPlayAgain }: RunResultsProp
           </div>
 
           <p className="text-3" style={{ fontSize: 'var(--fs-xs)', marginTop: 'var(--sp-5)' }}>
-            Survival time on record: {formatDuration(facts.survivalSeconds)} ·{' '}
+            {isOperations ? 'Mission time' : 'Survival time on record'}:{' '}
+            {formatDuration(facts.survivalSeconds)} ·{' '}
             <Badge tone="telemetry">single-player</Badge>{' '}
             <Badge tone="xp">adaptive AI</Badge>
           </p>

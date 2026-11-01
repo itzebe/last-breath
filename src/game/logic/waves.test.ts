@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  bossEscortArchetypes,
   difficultyIndex,
   eligibleArchetypes,
   isBossWave,
@@ -112,10 +113,29 @@ describe('wave planning', () => {
 });
 
 describe('enemy archetypes', () => {
-  it('defines the five spawnable doctrines plus the boss', () => {
-    expect(SPAWNABLE_ARCHETYPES).toHaveLength(5);
-    expect(SPAWNABLE_ARCHETYPES).toEqual(['rusher', 'flanker', 'sniper', 'tank', 'hunter']);
+  it('defines the seven spawnable doctrines plus the boss', () => {
+    expect(SPAWNABLE_ARCHETYPES).toEqual([
+      'rusher',
+      'flanker',
+      'sniper',
+      'tank',
+      'hunter',
+      'commander',
+      'medic',
+    ]);
     expect(ENEMY_ARCHETYPES.executor).toBeDefined();
+  });
+
+  it('keeps the support doctrines out of a boss escort', () => {
+    // A boss wave is a duel. A commander that keeps feeding reinforcements and a
+    // medic that keeps standing the escort back up would turn it into an
+    // attrition check, so neither may appear in a boss wave's roster.
+    const escort = bossEscortArchetypes(10);
+    expect(escort).not.toContain('commander');
+    expect(escort).not.toContain('medic');
+    expect(planWave(10).allowedArchetypes).toEqual(escort);
+    // Outside a boss wave the support doctrines are available as normal.
+    expect(planWave(9).allowedArchetypes).toContain('commander');
   });
 
   it('gives every archetype a complete, sane specification', () => {

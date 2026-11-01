@@ -90,12 +90,13 @@ export async function updateUsername(userId: string, username: string): Promise<
 /**
  * Records activity. Best-effort: a failure here must never break the interface,
  * so errors are logged rather than thrown.
+ *
+ * `last_seen_at` is server-owned — the owner is granted UPDATE on `username` and
+ * `display_name` only — so the timestamp is stamped by `touch_last_seen()` rather
+ * than written through the table.
  */
-export async function touchLastSeen(userId: string): Promise<void> {
+export async function touchLastSeen(): Promise<void> {
   const supabase = getSupabaseClient();
-  const { error } = await supabase
-    .from('profiles')
-    .update({ last_seen_at: new Date().toISOString() })
-    .eq('id', userId);
+  const { error } = await supabase.rpc('touch_last_seen');
   if (error) log.warn('could not update last_seen_at', error.message);
 }

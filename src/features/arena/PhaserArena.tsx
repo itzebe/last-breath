@@ -10,8 +10,10 @@ export interface PhaserArenaProps {
   adaptationEnabled: boolean;
   maxWaves?: number;
   seed?: number;
-  /** `survival` (default) or `deathmatch`. Fixed for the life of the run. */
+  /** `survival` (default), `deathmatch` or `operations`. Fixed for the run. */
   mode?: ArenaMode;
+  /** Operations: which mission to run. Defaults to OPERATION: LAST EXIT. */
+  missionId?: string;
   paused: boolean;
   onSnapshot: (snapshot: SimulationSnapshot) => void;
   onRunEnded: (snapshot: SimulationSnapshot) => void;
@@ -33,6 +35,7 @@ export function PhaserArena({
   maxWaves,
   seed,
   mode,
+  missionId,
   paused,
   onSnapshot,
   onRunEnded,
@@ -57,6 +60,7 @@ export function PhaserArena({
       seed,
       ...(maxWaves === undefined ? {} : { maxWaves }),
       ...(mode === undefined ? {} : { mode }),
+      ...(missionId === undefined ? {} : { missionId }),
     };
 
     const game = new Phaser.Game({

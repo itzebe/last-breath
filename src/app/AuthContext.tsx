@@ -118,7 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Record activity, but only once per mount and never as a blocking operation.
   useEffect(() => {
     if (!session?.user) return;
-    void touchLastSeen(session.user.id);
+    void touchLastSeen();
   }, [session?.user?.id, session?.user]);
 
   const refreshProfile = useCallback(async () => {

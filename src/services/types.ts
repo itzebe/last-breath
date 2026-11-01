@@ -2,7 +2,7 @@
  * and the UI agree on names, and so a migration that renames a column breaks the
  * build rather than silently returning `undefined` at runtime. */
 
-export type MatchMode = 'survival' | 'deathmatch';
+export type MatchMode = 'survival' | 'deathmatch' | 'operations';
 export type MatchOutcome = 'defeat' | 'extracted' | 'victory' | 'abandoned';
 export type LeaderboardSort = 'level' | 'xp' | 'eliminations' | 'wave' | 'survival';
 
@@ -49,6 +49,9 @@ export interface MatchRecord {
   xp_awarded: number;
   outcome: MatchOutcome;
   created_at: string;
+  /** Operations: objectives completed and whether the mission was extracted. */
+  objectives_completed: number;
+  extracted: boolean;
 }
 
 export interface UnlockedWeapon {
@@ -120,6 +123,14 @@ export interface MatchSubmission {
   bossDefeated: boolean;
   /** True when the adaptive director committed at least one tactical change. */
   adapted: boolean;
+  /**
+   * Operations: mission objectives completed before the run ended. Optional —
+   * the RPC and the Zod schema both default it, so a survival or deathmatch
+   * call site does not have to mention it.
+   */
+  objectivesCompleted?: number;
+  /** Operations: true when the player reached extraction and finished. */
+  extracted?: boolean;
 }
 
 export interface MatchSubmissionResult {

@@ -3,9 +3,11 @@ import {
   ARENA_HEIGHT,
   ARENA_WIDTH,
   CombatSimulation,
+  PLAYER_RADIUS,
   type SimulationEvent,
   type SimulationInput,
 } from '@/game/logic/simulation';
+import { ARENA_OBSTACLES, avoidObstacles } from '@/game/logic/obstacles';
 import { vec, distance } from '@/game/logic/vec';
 
 const FRAME_MS = 1000 / 60;
@@ -53,13 +55,24 @@ function hunterInput(sim: CombatSimulation): SimulationInput {
       nearest = enemy;
     }
   }
+  // A competent player reloads the moment the magazine runs dry; without this
+  // the bot simply stops dealing damage and the run stalls rather than ends.
+  const weapon = snapshot.player.weapons[snapshot.player.weapon];
+  if (weapon && weapon.ammoInMagazine === 0 && weapon.reloadRemainingMs === 0) sim.requestReload();
+
   const dx = nearest.position.x - player.x;
   const dy = nearest.position.y - player.y;
   const len = Math.max(1, Math.hypot(dx, dy));
   // Move to a mid range rather than straight in, so the run survives longer.
   const approach = best > 220 ? 1 : best < 120 ? -0.6 : 0;
+  // Steer around the arena's cover. The bot has to navigate the same geometry a
+  // human does; walking into a pillar and stopping is a bug in the bot, not the
+  // simulation, and it would mask real combat regressions.
+  const desired = vec((dx / len) * approach, (dy / len) * approach);
+  const move =
+    approach === 0 ? desired : avoidObstacles(player, desired, ARENA_OBSTACLES, PLAYER_RADIUS);
   return {
-    move: vec((dx / len) * approach, (dy / len) * approach),
+    move,
     aim: { ...nearest.position },
     firing: true,
   };

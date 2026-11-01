@@ -20,11 +20,29 @@ import { createUuid } from '@/lib/validation';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
+ * True only when the configured project is a *local* Supabase instance.
+ *
+ * This test signs up throwaway accounts and inserts real match rows. Pointing it
+ * at a hosted project — which is exactly what a developer with a production
+ * `.env.local` would do — would write that junk into production, so a remote URL
+ * is treated as "not runnable" rather than "runnable". `npm run db:start` is the
+ * only supported way to enable it.
+ */
+function isLocalSupabase(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname.endsWith('.local');
+  } catch {
+    return false;
+  }
+}
+
+/**
  * jsdom's `AbortSignal` is not an instance of the one Node's `fetch` expects, so
  * `AbortSignal.timeout` throws here. A raced timeout keeps the check portable.
  */
 async function supabaseReachable(): Promise<boolean> {
-  if (!env.isConfigured) return false;
+  if (!env.isConfigured || !isLocalSupabase(env.supabaseUrl)) return false;
   try {
     const response = await Promise.race([
       fetch(`${env.supabaseUrl}/auth/v1/health`, { headers: { apikey: env.supabaseAnonKey } }),

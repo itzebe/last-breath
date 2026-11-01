@@ -14,10 +14,24 @@
  * movement, collision or combat code.
  */
 
-export type EnemyArchetypeId = 'rusher' | 'flanker' | 'sniper' | 'tank' | 'hunter' | 'executor';
+export type EnemyArchetypeId =
+  | 'rusher'
+  | 'flanker'
+  | 'sniper'
+  | 'tank'
+  | 'hunter'
+  | 'commander'
+  | 'medic'
+  | 'executor';
 
 /** What a hostile is currently trying to do. The adaptive layer will steer this. */
 export type EnemyStance = 'approach' | 'hold' | 'reposition' | 'retreat' | 'encircle';
+
+/** Body proportions, which drive the procedural human silhouette. */
+export type CharacterBuild = 'slim' | 'standard' | 'heavy';
+
+/** Headgear, which is the fastest way to tell two uniforms apart at a glance. */
+export type CharacterHelmet = 'cap' | 'visor' | 'hood' | 'heavy' | 'beret';
 
 export interface EnemyArchetype {
   readonly id: EnemyArchetypeId;
@@ -56,6 +70,12 @@ export interface EnemyArchetype {
   readonly bodyColor: number;
   readonly accentColor: number;
   readonly shape: 'diamond' | 'chevron' | 'hexagon' | 'square' | 'triangulate' | 'boss';
+  /** Human silhouette parameters. `build` sets shoulder/hip width and limb
+   * thickness; `helmet` and `uniform` are the quickest read at a glance. */
+  readonly build: CharacterBuild;
+  readonly helmet: CharacterHelmet;
+  /** Uniform base colour (torso/limbs), distinct from `bodyColor` (trim). */
+  readonly uniformColor: number;
   /** Minimum wave before this archetype can spawn. */
   readonly minWave: number;
   /** Relative spawn weight once eligible. */
@@ -87,6 +107,9 @@ export const ENEMY_ARCHETYPES: Readonly<Record<EnemyArchetypeId, EnemyArchetype>
     bodyColor: 0xd8323f,
     accentColor: 0xff8a94,
     shape: 'chevron',
+    build: 'standard',
+    helmet: 'cap',
+    uniformColor: 0x2b3440,
     minWave: 1,
     spawnWeight: 34,
   },
@@ -114,6 +137,9 @@ export const ENEMY_ARCHETYPES: Readonly<Record<EnemyArchetypeId, EnemyArchetype>
     bodyColor: 0xb03bd8,
     accentColor: 0xe4a0ff,
     shape: 'diamond',
+    build: 'slim',
+    helmet: 'hood',
+    uniformColor: 0x241f33,
     minWave: 2,
     spawnWeight: 22,
   },
@@ -141,6 +167,9 @@ export const ENEMY_ARCHETYPES: Readonly<Record<EnemyArchetypeId, EnemyArchetype>
     bodyColor: 0x2f8fd8,
     accentColor: 0x9fd8ff,
     shape: 'hexagon',
+    build: 'standard',
+    helmet: 'visor',
+    uniformColor: 0x1b2b38,
     minWave: 3,
     spawnWeight: 16,
   },
@@ -168,6 +197,9 @@ export const ENEMY_ARCHETYPES: Readonly<Record<EnemyArchetypeId, EnemyArchetype>
     bodyColor: 0x8a6a2f,
     accentColor: 0xffd27a,
     shape: 'square',
+    build: 'heavy',
+    helmet: 'heavy',
+    uniformColor: 0x2f2a20,
     minWave: 4,
     spawnWeight: 14,
   },
@@ -195,8 +227,71 @@ export const ENEMY_ARCHETYPES: Readonly<Record<EnemyArchetypeId, EnemyArchetype>
     bodyColor: 0x1f9c7a,
     accentColor: 0x8affd9,
     shape: 'triangulate',
+    build: 'standard',
+    helmet: 'visor',
+    uniformColor: 0x17282a,
     minWave: 5,
     spawnWeight: 18,
+  },
+  commander: {
+    id: 'commander',
+    name: 'OVERSEER',
+    doctrine: 'Elects itself squad leader, fans its soldiers into a pincer and calls reinforcements when the squad is broken.',
+    maxHealth: 120,
+    speed: 104,
+    preferredRange: 340,
+    rangeTolerance: 120,
+    contactDamage: 12,
+    attackCooldownMs: 980,
+    attackRange: 34,
+    rangedDamage: 10,
+    rangedSpeed: 540,
+    rangedRange: 460,
+    radius: 19,
+    xpValue: 44,
+    scoreValue: 260,
+    aggression: 0.5,
+    caution: 0.7,
+    coordination: 1,
+    defaultStance: 'hold',
+    bodyColor: 0xe8b53a,
+    accentColor: 0xfff0b0,
+    shape: 'hexagon',
+    build: 'standard',
+    helmet: 'beret',
+    uniformColor: 0x2d2a1c,
+    minWave: 6,
+    spawnWeight: 9,
+  },
+  medic: {
+    id: 'medic',
+    name: 'FIELD MEDIC',
+    doctrine: 'Breaks off from the fight to channel a revive on the nearest downed ally.',
+    maxHealth: 78,
+    speed: 128,
+    preferredRange: 250,
+    rangeTolerance: 100,
+    contactDamage: 8,
+    attackCooldownMs: 900,
+    attackRange: 30,
+    rangedDamage: 6,
+    rangedSpeed: 460,
+    rangedRange: 300,
+    radius: 16,
+    xpValue: 34,
+    scoreValue: 200,
+    aggression: 0.45,
+    caution: 0.85,
+    coordination: 0.9,
+    defaultStance: 'reposition',
+    bodyColor: 0x4ad8a0,
+    accentColor: 0xd8fff0,
+    shape: 'chevron',
+    build: 'slim',
+    helmet: 'visor',
+    uniformColor: 0x1c332c,
+    minWave: 7,
+    spawnWeight: 10,
   },
   executor: {
     id: 'executor',
@@ -222,6 +317,9 @@ export const ENEMY_ARCHETYPES: Readonly<Record<EnemyArchetypeId, EnemyArchetype>
     bodyColor: 0xff4a2f,
     accentColor: 0xffe08a,
     shape: 'boss',
+    build: 'heavy',
+    helmet: 'heavy',
+    uniformColor: 0x2a1410,
     minWave: 99,
     spawnWeight: 0,
   },
@@ -233,6 +331,8 @@ export const SPAWNABLE_ARCHETYPES: readonly EnemyArchetypeId[] = [
   'sniper',
   'tank',
   'hunter',
+  'commander',
+  'medic',
 ];
 
 /**

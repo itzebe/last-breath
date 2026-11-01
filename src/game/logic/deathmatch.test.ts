@@ -9,7 +9,8 @@ import {
   tickDeathmatch,
   type DeathmatchRules,
 } from '@/game/logic/deathmatch';
-import { CombatSimulation, type SimulationEvent } from '@/game/logic/simulation';
+import { CombatSimulation, PLAYER_RADIUS, type SimulationEvent } from '@/game/logic/simulation';
+import { ARENA_OBSTACLES, avoidObstacles } from '@/game/logic/obstacles';
 import { vec, distance } from '@/game/logic/vec';
 import { matchScore, type MatchFacts } from '@/services/progression';
 
@@ -303,7 +304,15 @@ function fightStep(sim: CombatSimulation): { move: ReturnType<typeof vec>; aim: 
     const range = Math.hypot(toTarget.x, toTarget.y);
     if (range > 260) {
       const inv = 1 / Math.max(1, range);
-      move = vec(toTarget.x * inv, toTarget.y * inv);
+      // Steer around the arena's cover instead of walking into it: the bot has
+      // to navigate the same geometry a human does, or it stalls against a
+      // crate and the test measures the bot rather than the mode.
+      move = avoidObstacles(
+        sim.playerPos,
+        vec(toTarget.x * inv, toTarget.y * inv),
+        ARENA_OBSTACLES,
+        PLAYER_RADIUS,
+      );
     }
   }
   return { move, aim: target, firing: true };
