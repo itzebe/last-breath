@@ -41,3 +41,42 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  server-integrity:
+    name: Server integrity (pgTAP + live E2E)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.0
+
+      # Brings up a genuine stack: real Postgres, the real auth schema and roles,
+      # and real PostgREST. The pgTAP suites and the live integration tests both
+      # need it; nothing here touches a hosted project. The heavier optional
+      # services (studio, storage, edge functions, analytics) are excluded — they
+      # are irrelevant to these tests and only slow the job down.
+      - name: Start local Supabase
+        run: >-
+          supabase start
+          --exclude studio,inbucket,storage,imgproxy,edge-runtime,realtime,analytics,vector
+
+      - name: Verify server integrity
+        run: npm run verify:server
+
+      - name: Show local logs on failure
+        if: failure()
+        run: supabase status || true

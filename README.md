@@ -4,7 +4,7 @@
 
 A mobile-friendly, top-down 360° survival shooter where the arena studies how you fight. There is no fixed strategy — only the one the enemy has not learned yet.
 
-Built for the **Loadout AI Game Competition**. Part 2 of two.
+Built for the **Loadout AI Game Competition**.
 
 ---
 
@@ -104,7 +104,18 @@ npm run test       # vitest run
 npm run build      # tsc -b && vite build
 ```
 
-`npm run test` also runs `src/services/dataService.integration.test.ts`, which signs a throwaway operator up against the live local Supabase and submits real matches through the real RPC. It **skips itself** when no Supabase is reachable, so the suite passes in a bare environment; run `npm run db:start` to include it.
+`npm run test` also runs `src/services/dataService.integration.test.ts` and `src/features/arena/operationsFlow.integration.test.ts`. Both sign throwaway operators up against the live local Supabase and submit real matches through the real RPC — the Operations one plays the real `CombatSimulation` to a completed extraction first. They **skip themselves** when no Supabase is reachable, so the suite passes in a bare environment; run `npm run db:start` to include them.
+
+### Server integrity
+
+The client is untrusted, so the database has to enforce its own rules. The pgTAP suites in `supabase/tests/` call the real RPCs as the real roles and prove that it does: server-side scoring, submission validation, idempotency, rate limiting, achievement awards, level-gated weapon unlocks, and row-level-security isolation between players.
+
+```bash
+npm run db:start        # once, if the stack is not already up
+npm run verify:server   # resets the DB, runs pgTAP, then the live integration tests
+```
+
+`npm run verify:server` resets the database first, which also proves every migration still applies cleanly in order. CI runs it as a separate job (`Server integrity`).
 
 ---
 
@@ -169,5 +180,7 @@ Part 1 established the foundation: landing page, real Supabase authentication, p
 Part 2 completes the experience: a deep adaptive-AI behaviour model with five enemy archetypes, the **THE EXECUTOR** boss with three phases and telegraphed attacks, survival as a scored progression mode, a single-player **deathmatch** against clearly-labelled AI opponents, XP/levels/unlocks/achievements, a global leaderboard, procedural audio, and a visual-polish pass.
 
 Part 3 turns the arena into a cinematic tactical survival game: articulated character rendering and animation, a tactical AI layer (squad election, cover, suppression, flanking, commander reinforcements, medic revives — seven doctrines in all), player **dodge roll** and **grenades**, a roguelite **upgrade** draft between fights, and the scripted **Operations** mission mode with server-authoritative scoring.
+
+Part 4 hardens the server: a pgTAP integrity suite that calls the real RPCs as the real roles, an end-to-end test that plays a real mission through the real client and database, a CI job that runs both against a genuine local stack, and a fix for a silent progression bug where a level reached through achievement XP did not unlock the weapon gated at that level.
 
 The build is Vercel-ready (`npm run build` → static `dist/`). Deployment requires the Supabase project URL and anon key as Vercel environment variables, plus running the migrations against the project database.
