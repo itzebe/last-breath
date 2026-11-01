@@ -1,5 +1,5 @@
 import { Bar } from '@/components/ui';
-import { formatClock, formatNumber } from '@/lib/format';
+import { formatClock, formatNumber, formatReserve } from '@/lib/format';
 import type { SimulationSnapshot } from '@/game/logic/simulation';
 import { getWeapon } from '@/game/logic/weapons';
 
@@ -185,7 +185,7 @@ export function CombatHud({ snapshot, onPause, onToggleDebug, onDodge, onGrenade
               <span className="hud__label">{weapon.name}</span>
               <span className={`hud__value ${lowAmmo && !reloading ? 'hud__value--hostile' : 'hud__value--ammo'}`} style={{ fontSize: 'var(--fs-md)' }}>
                 {reloading ? '—' : state.ammoInMagazine}
-                <span style={{ color: 'var(--ink-3)', fontSize: 'var(--fs-xs)' }}>/{state.reserveAmmo}</span>
+                <span style={{ color: 'var(--ink-3)', fontSize: 'var(--fs-xs)' }}>/{formatReserve(state.reserveAmmo)}</span>
               </span>
             </div>
             <Bar
@@ -196,7 +196,7 @@ export function CombatHud({ snapshot, onPause, onToggleDebug, onDodge, onGrenade
             <p className="hud__label" style={{ marginTop: 6 }}>
               {reloading
                 ? `Reloading… ${(state.reloadRemainingMs / 1000).toFixed(1)}s`
-                : `${weapon.magazine} round magazine · reserve ${state.reserveAmmo}`}
+                : `${weapon.magazine} round magazine · reserve ${formatReserve(state.reserveAmmo)}`}
             </p>
           </div>
 

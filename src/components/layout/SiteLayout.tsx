@@ -183,6 +183,9 @@ export function AppFooter() {
 export function SiteLayout({ children }: { children: ReactNode }) {
   return (
     <div className="app-frame">
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
       <AppNav />
       <main id="main">{children}</main>
       <AppFooter />

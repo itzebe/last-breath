@@ -157,7 +157,7 @@ Seven enemy doctrines populate the arena: **rusher**, **flanker**, **sniper**, *
 
 ## Weapons
 
-Four weapons with genuinely different behaviour: a balanced **pistol**, an automatic **assault rifle**, a multi-pellet **shotgun** and a high-precision **sniper rifle**. Each has its own damage, fire rate, reload duration, magazine capacity, projectile behaviour and visual feedback. Weapons unlock by level and by pickups in the arena.
+Four weapons with genuinely different behaviour: a balanced **pistol**, an automatic **assault rifle**, a multi-pellet **shotgun** and a high-precision **sniper rifle**. Each has its own damage, fire rate, reload duration, magazine capacity, projectile behaviour and visual feedback. The first two are standard issue; the shotgun and sniper unlock at levels 3 and 5. Health and ammunition pickups drop from the arena during a run.
 
 ---
 

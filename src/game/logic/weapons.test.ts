@@ -340,6 +340,17 @@ describe('player state', () => {
     expect(player.weapons.rifle.reserveAmmo).toBe(granted);
   });
 
+  it('refills the magazine from an ammo pickup when the reserve is unlimited', () => {
+    // The default loadout runs an unlimited reserve, so a pickup must still be
+    // worth collecting: it tops the magazine back up.
+    const player = createPlayerState(['pistol']);
+    player.weapons.pistol.ammoInMagazine = 2;
+    const granted = grantAmmo(player);
+    expect(granted).toBe(WEAPONS.pistol.magazine - 2);
+    expect(player.weapons.pistol.ammoInMagazine).toBe(WEAPONS.pistol.magazine);
+    expect(player.weapons.pistol.reserveAmmo).toBe(Number.POSITIVE_INFINITY);
+  });
+
   it('flags low ammunition correctly', () => {
     const player = createPlayerState(['pistol']);
     expect(isLowAmmo(player)).toBe(false);

@@ -223,18 +223,33 @@ export function healPlayer(player: PlayerState, amount: number): number {
   return player.health - before;
 }
 
-/** Refills reserve ammo for the whole loadout. Returns rounds granted. */
+/**
+ * Applies an ammunition pickup to the whole loadout. Returns rounds granted.
+ *
+ * A weapon with a finite reserve (an upgrade or a future loadout rule) is
+ * topped up in reserve, capped at `MAX_RESERVE_MULTIPLIER` magazines. The
+ * default loadout runs an *unlimited* reserve, where reserve is meaningless —
+ * there the magazine is the real pool, so the pickup instead refills the
+ * magazine, which is worth the same thing it is worth in any shooter: skipping
+ * the reload at the moment you need the rounds.
+ */
 export function grantAmmo(player: PlayerState, fraction = AMMO_PICKUP_FRACTION): number {
   let granted = 0;
   for (const id of player.loadout) {
     const state = player.weapons[id];
-    if (!state || !Number.isFinite(state.reserveAmmo)) continue;
+    if (!state) continue;
     const spec = getWeapon(id);
-    const cap = spec.magazine * MAX_RESERVE_MULTIPLIER;
-    const amount = Math.max(1, Math.round(spec.magazine * fraction));
-    const next = Math.min(cap, state.reserveAmmo + amount);
-    granted += next - state.reserveAmmo;
-    state.reserveAmmo = next;
+    if (Number.isFinite(state.reserveAmmo)) {
+      const cap = spec.magazine * MAX_RESERVE_MULTIPLIER;
+      const amount = Math.max(1, Math.round(spec.magazine * fraction));
+      const next = Math.min(cap, state.reserveAmmo + amount);
+      granted += next - state.reserveAmmo;
+      state.reserveAmmo = next;
+    } else {
+      const next = state.capacity;
+      granted += Math.max(0, next - state.ammoInMagazine);
+      state.ammoInMagazine = next;
+    }
   }
   return granted;
 }
