@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LAST_EXIT,
   MISSIONS,
+  completedObjectives,
   createMissionState,
   currentEncounter,
   currentObjective,
@@ -357,5 +358,54 @@ describe('LAST EXIT is winnable end to end', () => {
     advance(LAST_EXIT, state, 35, { position: AT_PAD });
 
     expect(state.phase).toBe('complete');
+  });
+});
+
+describe('completed objective counting (submission contract)', () => {
+  it('counts zero completed while the first objective is still in progress', () => {
+    const state = createMissionState(LAST_EXIT);
+    // Display index is 1 here; nothing has been finished yet.
+    expect(state.objectiveIndex).toBe(0);
+    expect(completedObjectives(LAST_EXIT, state)).toBe(0);
+  });
+
+  it('counts the objectives finished, not the objective being worked on', () => {
+    const state = createMissionState(LAST_EXIT);
+    // Park the player on the second objective without clearing the first.
+    state.objectiveIndex = 2;
+    expect(completedObjectives(LAST_EXIT, state)).toBe(2);
+  });
+
+  it('reports all six only once the mission is complete', () => {
+    const state = createMissionState(LAST_EXIT);
+    state.objectiveIndex = 5;
+    // Five done, the sixth still in progress.
+    expect(completedObjectives(LAST_EXIT, state)).toBe(5);
+
+    state.objectiveIndex = LAST_EXIT.objectives.length;
+    expect(completedObjectives(LAST_EXIT, state)).toBe(6);
+  });
+
+  it('never reports more objectives than the mission has', () => {
+    const state = createMissionState(LAST_EXIT);
+    state.objectiveIndex = LAST_EXIT.objectives.length + 3;
+    expect(completedObjectives(LAST_EXIT, state)).toBe(LAST_EXIT.objectives.length);
+  });
+
+  it('never reports a negative count', () => {
+    const state = createMissionState(LAST_EXIT);
+    state.objectiveIndex = -4;
+    expect(completedObjectives(LAST_EXIT, state)).toBe(0);
+  });
+
+  it('tracks a real run: the count rises only as objectives are cleared', () => {
+    const state = createMissionState(LAST_EXIT);
+    // Stage 1 clears the entry hall.
+    advance(LAST_EXIT, state, 6, { position: AT_ENTRY, killsPerSecond: 8 });
+    expect(completedObjectives(LAST_EXIT, state)).toBe(1);
+
+    // Stage 2 reaches the relay: now two are done.
+    tickMission(LAST_EXIT, state, { dtMs: 16, killsThisFrame: 0, playerPosition: AT_RELAY, encounterCleared: false });
+    expect(completedObjectives(LAST_EXIT, state)).toBe(2);
   });
 });

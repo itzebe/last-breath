@@ -15,6 +15,7 @@ function mission(overrides: Partial<Mission> = {}): Mission {
     name: 'Operation: Last Exit',
     briefing: 'Reach the relay, hold it, then extract.',
     objectiveIndex: 2,
+    objectivesCompleted: 1,
     objectiveTotal: 6,
     objectiveLabel: 'Hold the relay',
     objectiveDetail: 'The relay must stay online while the request uploads.',

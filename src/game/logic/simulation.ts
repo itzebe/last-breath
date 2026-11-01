@@ -79,6 +79,7 @@ import {
 } from './obstacles';
 import {
   MEMORY_MS,
+  REINFORCEMENT_COOLDOWN_MS,
   REVIVE_CHANNEL_MS,
   REVIVE_HEALTH_FRACTION,
   ROLE_FOR_ARCHETYPE,
@@ -116,6 +117,7 @@ import {
 import {
   LAST_EXIT,
   MISSIONS,
+  completedObjectives,
   createMissionState,
   currentEncounter,
   currentObjective,
@@ -529,6 +531,11 @@ export interface MissionSnapshot {
   phase: MissionState['phase'];
   /** 1-based, for display. */
   objectiveIndex: number;
+  /**
+   * How many objectives have actually been completed (0-based count). This is
+   * the value scoring and submission use — it is not the display index above.
+   */
+  objectivesCompleted: number;
   objectiveTotal: number;
   objectiveLabel: string;
   objectiveDetail: string;
@@ -1675,7 +1682,7 @@ export class CombatSimulation {
       const squadSize = squad?.members.filter((m) => !m.dying).length ?? 0;
       if (shouldCallReinforcements(squadSize, enemy.reinforcementCooldownMs, enemy.reinforcementsCalled)) {
         enemy.reinforcementsCalled += 1;
-        enemy.reinforcementCooldownMs = 14_000;
+        enemy.reinforcementCooldownMs = REINFORCEMENT_COOLDOWN_MS;
         this.callReinforcements(enemy, target);
       }
     }
@@ -2569,6 +2576,7 @@ export class CombatSimulation {
       briefing: mission.briefing,
       phase: state.phase,
       objectiveIndex: Math.min(state.objectiveIndex + 1, mission.objectives.length),
+      objectivesCompleted: completedObjectives(mission, state),
       objectiveTotal: mission.objectives.length,
       objectiveLabel: objective?.label ?? 'Mission complete',
       objectiveDetail: objective?.detail ?? '',

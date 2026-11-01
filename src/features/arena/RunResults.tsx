@@ -39,6 +39,8 @@ const ACHIEVEMENT_LABELS: Record<string, string> = {
   survivor_300: 'Long Haul',
   centurion: 'Centurion',
   adaptation_seen: 'Adaptation Observed',
+  extraction_ready: 'Extraction Ready',
+  objective_focus: 'Objective Focus',
 };
 
 function achievementLabel(id: string): string {
@@ -61,7 +63,9 @@ export function RunResults({ snapshot, submission, onPlayAgain }: RunResultsProp
     survivalSeconds: Math.floor(snapshot.elapsedMs / 1000),
     damageDealt: Math.round(snapshot.damageDealt),
     outcome: extracted ? 'extracted' : victory ? 'victory' : 'defeat',
-    objectivesCompleted: isOperations ? (snapshot.mission?.objectiveIndex ?? 0) : 0,
+    // The preview must use the same count the submission sends: the number of
+    // objectives actually finished, not the 1-based display index.
+    objectivesCompleted: isOperations ? (snapshot.mission?.objectivesCompleted ?? 0) : 0,
     extracted,
   };
 

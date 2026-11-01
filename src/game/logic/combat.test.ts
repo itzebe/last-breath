@@ -227,5 +227,18 @@ describe('Operations mode in the simulation', () => {
     expect(snapshot.mode).toBe('operations');
     // objectiveIndex is 1-based for display; at the start of the mission it is 1.
     expect(snapshot.mission?.objectiveIndex).toBe(1);
+    // ...but the count of objectives *completed* is 0, and that is what the
+    // submission sends. The display index must never be used as the count.
+    expect(snapshot.mission?.objectivesCompleted).toBe(0);
+  });
+
+  it('reports the completed count, not the display index, mid-mission', () => {
+    const sim = new CombatSimulation({ loadout: ['rifle'], seed: 17, mode: 'operations' });
+    start(sim);
+    const mission = sim.snapshot().mission;
+    expect(mission).not.toBeNull();
+    // The two must differ by exactly one while the mission is in flight: the
+    // display index is 1-based, the completed count is 0-based.
+    expect(mission!.objectiveIndex).toBe(mission!.objectivesCompleted + 1);
   });
 });

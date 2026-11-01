@@ -210,7 +210,9 @@ export function ArenaPage() {
           outcome,
           bossDefeated: final.bossDefeated,
           adapted: final.adapted,
-          objectivesCompleted: isOperations ? (final.mission?.objectiveIndex ?? 0) : 0,
+          // The snapshot's `objectiveIndex` is 1-based for display; the count of
+          // objectives actually finished is `objectivesCompleted`.
+          objectivesCompleted: isOperations ? (final.mission?.objectivesCompleted ?? 0) : 0,
           extracted,
         });
 

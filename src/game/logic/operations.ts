@@ -221,6 +221,17 @@ export function currentObjective(mission: Mission, state: MissionState): Objecti
   return mission.objectives[state.objectiveIndex] ?? null;
 }
 
+/**
+ * How many objectives the player has actually completed, for scoring and
+ * submission. `state.objectiveIndex` is the zero-based index of the objective
+ * *in progress*, so it equals the number finished; it is clamped because a
+ * finished mission points one past the end. This is deliberately not the
+ * 1-based `MissionSnapshot.objectiveIndex`, which is a display value.
+ */
+export function completedObjectives(mission: Mission, state: MissionState): number {
+  return Math.max(0, Math.min(state.objectiveIndex, mission.objectives.length));
+}
+
 export function currentEncounter(mission: Mission, state: MissionState): Encounter | null {
   return mission.encounters[state.encounterIndex] ?? null;
 }
