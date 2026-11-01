@@ -21,7 +21,7 @@ import type { UpgradeId } from '@/game/logic/upgrades';
 import { toAppError } from '@/lib/errors';
 import { formatClock } from '@/lib/format';
 import { createUuid } from '@/lib/validation';
-import type { MatchOutcome } from '@/services/types';
+import { toMatchSubmission } from './submission';
 
 type RunState = 'loading' | 'active' | 'paused' | 'ended';
 
@@ -170,51 +170,13 @@ export function ArenaPage() {
         return;
       }
 
-      const isDeathmatch = final.mode === 'deathmatch';
-      const isOperations = final.mode === 'operations';
-      const extracted = isOperations && final.mission?.phase === 'complete';
-      // Operations reports `extracted` rather than `victory`, so the database
-      // records a mission result as a mission result.
-      const outcome: MatchOutcome = extracted
-        ? 'extracted'
-        : final.outcome === 'victory'
-          ? 'victory'
-          : 'defeat';
       // The client's own score is never sent. The database derives score and XP
       // from these facts, so a tampered payload can only misreport facts, not
-      // fabricate a rank.
-      //
-      // `clientMatchId` is the idempotency key and the column is `uuid`, so it
-      // must be a real UUID — a composed string fails the Postgres cast.
+      // fabricate a rank. `createUuid` supplies the idempotency key.
       const clientMatchId = createUuid();
 
       try {
-        const result = await submitMatch({
-          clientMatchId,
-          mode: final.mode,
-          // Deathmatch has no waves: reporting the difficulty-derived waveNumber
-          // would corrupt `highest_wave`, so it is reported as 0.
-          // Neither Deathmatch nor Operations has survival waves, and reporting
-          // the difficulty-derived wave number would corrupt `highest_wave`.
-          waveReached: isDeathmatch || isOperations ? 0 : final.waveNumber,
-          eliminations: final.eliminations,
-          deaths: isDeathmatch
-            ? (final.deathmatch?.playerDeaths ?? 0)
-            : final.outcome === 'victory'
-              ? 0
-              : 1,
-          damageDealt: Math.round(final.damageDealt),
-          shotsFired: final.shotsFired,
-          shotsHit: final.shotsHit,
-          survivalSeconds: Math.floor(final.elapsedMs / 1000),
-          outcome,
-          bossDefeated: final.bossDefeated,
-          adapted: final.adapted,
-          // The snapshot's `objectiveIndex` is 1-based for display; the count of
-          // objectives actually finished is `objectivesCompleted`.
-          objectivesCompleted: isOperations ? (final.mission?.objectivesCompleted ?? 0) : 0,
-          extracted,
-        });
+        const result = await submitMatch(toMatchSubmission(final, clientMatchId));
 
         if (result.duplicate) {
           setSubmission({ status: 'duplicate' });
