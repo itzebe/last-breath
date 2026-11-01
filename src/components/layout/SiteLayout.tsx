@@ -172,7 +172,7 @@ export function AppFooter() {
         </div>
         <div className="footer__legal">
           <span>LAST BREATH — competition build. Original visual identity, procedural art and audio.</span>
-          <span className="mono">v0.1.0 · Part 1</span>
+          <span className="mono">v0.1.0 · Part 4</span>
         </div>
       </div>
     </footer>

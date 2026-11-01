@@ -13,10 +13,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:db": "supabase test db supabase/tests",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "verify:server": "bash scripts/verify-server-integrity.sh"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.58.0",
