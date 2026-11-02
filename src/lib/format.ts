@@ -10,6 +10,17 @@ export function formatCompact(value: number): string {
   return new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
 
+/**
+ * Reserve rounds for the combat HUD.
+ *
+ * A weapon with unlimited reserve (the default loadout) reports
+ * `Number.POSITIVE_INFINITY`; rendering that as "Infinity" leaks an
+ * implementation detail into the interface, so it is shown as the ∞ glyph.
+ */
+export function formatReserve(value: number): string {
+  return Number.isFinite(value) ? String(value) : '∞';
+}
+
 /** Seconds → `m:ss` (or `h:mm:ss` past an hour). */
 export function formatDuration(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '—';

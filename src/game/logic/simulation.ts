@@ -368,7 +368,7 @@ export type SimulationEvent =
   | { type: 'reload_finished'; weapon: WeaponId }
   | { type: 'weapon_switched'; weapon: WeaponId }
   | { type: 'pickup_collected'; kind: PickupKind; at: Vec2 }
-  | { type: 'wave_started'; wave: number; label: string; isBossWave: boolean }
+  | { type: 'wave_started'; wave: number; label: string; isBossWave: boolean; hostiles: number }
   | { type: 'wave_cleared'; wave: number; xp: number; score: number }
   | { type: 'adaptation_changed'; profile: string; profileName: string; confidence: number; reason: string }
   | { type: 'boss_phase'; phase: 1 | 2 | 3; from: 1 | 2 | 3 }
@@ -766,6 +766,7 @@ export class CombatSimulation {
       wave: this.wave.wave,
       label: this.wave.label,
       isBossWave: this.wave.isBossWave,
+      hostiles: this.spawnQueue.length,
     });
     if (this.wave.isBossWave) this.spawnBoss();
   }
@@ -1155,6 +1156,7 @@ export class CombatSimulation {
           wave: state.encounterIndex + 1,
           label: next.intro,
           isBossWave: false,
+          hostiles: this.missionSpawnQueue.length,
         });
         // Between encounters, Operations offers a field upgrade. The offer
         // freezes the arena (see `step`), so it is a genuine decision made

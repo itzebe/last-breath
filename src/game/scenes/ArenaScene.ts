@@ -551,7 +551,7 @@ export class ArenaScene extends Phaser.Scene {
         break;
       case 'wave_started':
         audio.play('wave_start');
-        this.showWaveBanner(event.label, event.isBossWave ? 'THREAT LEVEL: CRITICAL' : `HOSTILES: ${this.sim.snapshot().wave.totalEnemies}`);
+        this.showWaveBanner(event.label, event.isBossWave ? 'THREAT LEVEL: CRITICAL' : `HOSTILES: ${event.hostiles}`);
         break;
       case 'wave_cleared':
         audio.play('wave_clear');

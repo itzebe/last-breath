@@ -8,6 +8,7 @@ import {
   type SimulationInput,
 } from '@/game/logic/simulation';
 import { ARENA_OBSTACLES, avoidObstacles } from '@/game/logic/obstacles';
+import { LAST_EXIT } from '@/game/logic/operations';
 import { vec, distance } from '@/game/logic/vec';
 
 const FRAME_MS = 1000 / 60;
@@ -38,6 +39,46 @@ function collectEvents(sim: CombatSimulation): SimulationEvent[] {
   const events: SimulationEvent[] = [];
   sim.subscribe((event) => events.push(event));
   return events;
+}
+
+/**
+ * Plays the loaded mission to completion with a deterministic bot: walk to the
+ * objective, fire at the nearest hostile, reload when dry, take the first
+ * upgrade offered. The simulation must already be an invulnerable Operations
+ * run, so the bot cannot die and the route always finishes.
+ */
+function playMission(sim: CombatSimulation): void {
+  const maxFrames = 60 * 60 * 10;
+  for (let frame = 0; frame < maxFrames && !sim.isEnded; frame += 1) {
+    const snapshot = sim.snapshot();
+    if (snapshot.awaitingUpgrade) {
+      sim.chooseUpgrade(snapshot.upgradeOffer[0]!);
+      continue;
+    }
+    const weapon = snapshot.player.weapons[snapshot.player.weapon];
+    if (weapon && weapon.ammoInMagazine === 0) {
+      sim.requestReload();
+      sim.step(FRAME_MS, { move: vec(), aim: null, firing: false });
+      continue;
+    }
+    const me = sim.playerPos;
+    const target = snapshot.mission?.objectivePosition ?? me;
+    const dx = target.x - me.x;
+    const dy = target.y - me.y;
+    const span = Math.hypot(dx, dy);
+    const move = span > 40 ? vec(dx / span, dy / span) : vec();
+    let aim: { x: number; y: number } | null = null;
+    let nearest = Number.POSITIVE_INFINITY;
+    for (const enemy of snapshot.enemies) {
+      if (enemy.dying) continue;
+      const d = distance(me, enemy.position);
+      if (d < nearest) {
+        nearest = d;
+        aim = enemy.position;
+      }
+    }
+    sim.step(FRAME_MS, { move, aim, firing: aim !== null });
+  }
 }
 
 /** A deterministic "player" that seeks and fires at the nearest hostile. */
@@ -336,6 +377,46 @@ describe('CombatSimulation — waves and progression', () => {
     void plan;
     // Direct comparison via the exported planner keeps this independent of luck.
     expect(wave1).toBeLessThan(30);
+  });
+
+  it('reports the hostiles actually committed to each wave on the banner event', () => {
+    // The banner subtitle reads `wave_started.hostiles`, not the survival plan.
+    // In Operations the two differ, so this pins the count the encounter really
+    // spawns rather than the wave-1 plan's.
+    const sim = new CombatSimulation({ loadout: ['rifle'], seed: 31 });
+    const events = collectEvents(sim);
+    advance(sim, 2);
+    const started = events.find((e) => e.type === 'wave_started');
+    expect(started).toBeDefined();
+    if (started?.type === 'wave_started') {
+      expect(started.hostiles).toBe(sim.snapshot().enemiesRemaining);
+      expect(started.hostiles).toBeGreaterThan(0);
+    }
+  });
+
+  it('reports each Operations encounter\u2019s own hostile count on the banner event', () => {
+    // Drives OPERATION: LAST EXIT to completion with an invulnerable bot. The
+    // banner must carry the encounter's count, not the survival wave plan's:
+    // encounter 3 fields 10 hostiles where wave 1 plans 8, so a plan-derived
+    // count would be wrong on every encounter but the first.
+    const sim = new CombatSimulation({
+      loadout: ['rifle'],
+      seed: 4242,
+      mode: 'operations',
+      missionId: LAST_EXIT.id,
+      upgradesEnabled: true,
+      playerInvulnerable: true,
+    });
+    const events = collectEvents(sim);
+    playMission(sim);
+    const banners = events.filter((e) => e.type === 'wave_started');
+    expect(banners.length).toBeGreaterThanOrEqual(3);
+    for (const banner of banners) {
+      expect(banner.hostiles).toBe(LAST_EXIT.encounters[banner.wave - 1]!.enemies.length);
+    }
+    // The last banner must differ from the survival plan, proving the count is
+    // not merely the wave plan wearing the encounter's name.
+    expect(banners[banners.length - 1]!.hostiles).not.toBe(sim.snapshot().wave.totalEnemies);
   });
 
   it('ends in victory when the configured final wave is cleared', () => {
